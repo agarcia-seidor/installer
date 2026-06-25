@@ -1,0 +1,220 @@
+services:
+  daiananext:
+    image: cloudseidoranalytics/daiana:v2.1.5
+    container_name: daiana-next
+    restart: unless-stopped
+    volumes: 
+      - ./volumes/daiana/static:/app/src/static   
+    environment:
+      NEXT_PUBLIC_APP_URL: ${SITE_URL}
+      NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
+      NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+    depends_on:
+      daianapython:
+        condition: service_healthy
+        
+  daianapython:
+    image: cloudseidoranalytics/daianapython:v2.1.5
+    container_name: daiana-python
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ffprobe_location : "C:\ffmpeg\ffprobe.exe"
+      ffmpeg_location : "C:\ffmpeg\ffmpeg.exe"
+      CREDENTIAL_YT: ${CREDENTIAL_YT}
+      SUPABASE_BASE_URL: ${SUPABASE_PUBLIC_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      AUTH_KEY: ${AUTH_KEY}
+      DB_HOST: ${POSTGRES_HOST}
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: postgres.${POOLER_TENANT_ID}
+      DB_PASS: ${POSTGRES_PASSWORD}
+      DB_PORT: ${POSTGRES_PORT}
+      db_type: ${POSTGRES_DB}
+      SUBSCRIPTION_PLANS: '{"trial":{"price":0,"maxMessages":250,"maxVirtualAssistants":1,"maxUsers":1,"microsoftTeamsIntegrated":false,"whatsappIntegrated":false,"apiAccess":false,"websitesEmbedding":true,"documentsUpload":true},"personal":{"price":50,"maxMessages":2000,"maxVirtualAssistants":1,"maxUsers":1,"microsoftTeamsIntegrated":false,"whatsappIntegrated":false,"apiAccess":false,"websitesEmbedding":true,"documentsUpload":true},"pro":{"price":100,"maxMessages":5000,"maxVirtualAssistants":5,"maxUsers":1,"microsoftTeamsIntegrated":false,"whatsappIntegrated":false,"apiAccess":false,"websitesEmbedding":true,"documentsUpload":true},"business":{"price":500,"maxMessages":30000,"maxVirtualAssistants":50,"maxUsers":5,"microsoftTeamsIntegrated":false,"whatsappIntegrated":false,"apiAccess":false,"websitesEmbedding":true,"documentsUpload":true},"enterprise":{"price":1000,"maxMessages":100000,"maxVirtualAssistants":999999,"maxUsers":50,"microsoftTeamsIntegrated":true,"whatsappIntegrated":true,"apiAccess":true,"websitesEmbedding":true,"documentsUpload":true}}'
+      FIGURES_DIR: ./src/static
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GOOGLE_API_KEY: ${GEMINI_API_KEY}
+      GOOGLE_TYPE: ${GOOGLE_TYPE}
+      GOOGLE_PROJECT_ID: ${GOOGLE_PROJECT_ID}
+      GOOGLE_PRIVATE_KEY_ID: ${GOOGLE_PRIVATE_KEY_ID}
+      GOOGLE_PRIVATE_KEY: ${GOOGLE_PRIVATE_KEY}
+      GOOGLE_CLIENT_EMAIL: ${GOOGLE_CLIENT_EMAIL}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_AUTH_URI: ${GOOGLE_AUTH_URI}
+      GOOGLE_TOKEN_URI: ${GOOGLE_TOKEN_URI}
+      GOOGLE_AUTH_PROVIDER_X509_CERT_URL: ${GOOGLE_AUTH_PROVIDER_X509_CERT_URL}
+      GOOGLE_CLIENT_X509_CERT_URL: ${GOOGLE_CLIENT_X509_CERT_URL}
+      GOOGLE_UNIVERSE_DOMAIN: ${GOOGLE_UNIVERSE_DOMAIN}
+      GOOGLE_DRIVE_CREDENTIALS: ${GOOGLE_DRIVE_CREDENTIALS}
+      OPENAI_MODEL: ${GPTMODEL}
+      GPTMODEL: ${GPTMODEL}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL}
+      OPENAI_TEMPERATURE: 0.1
+      GOOGLE_MODEL: ${GOOGLE_MODEL}
+      GOOGLE_EMBEDDING_MODEL: ${GOOGLE_EMBEDDING_MODEL}
+      GOOGLE_TEMPERATURE: 0.1
+      LICENSE_ACTIVATION_BASE_URL: ${LICENSE_ACTIVATION_BASE_URL}
+    tty: true
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://daianapython:5002/api/v1/health || exit 1"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 30s
+
+  daianavanna:
+    image: cloudseidoranalytics/daianavanna:v1.30.4
+    container_name: daiana-vanna
+    restart: unless-stopped
+    platform: linux/amd64
+    working_dir: /app
+    command: python app.py
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      FLASK_ENV: production
+      PYTHONUNBUFFERED: 1
+      FLASK_DEBUG: 0
+    tty: true
+    depends_on:
+      daianapython:
+        condition: service_healthy
+
+  daianaqdrant:
+    image: qdrant/qdrant:v1.15.5
+    container_name: daiana-qdrant
+    restart: unless-stopped
+    platform: linux/arm64
+    volumes:
+      - ./volumes/daiana/qdrant/storage:/qdrant/storage
+    environment:
+      QDRANT__LOG_LEVEL: "INFO"
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    depends_on:
+      daianapython:
+        condition: service_healthy
+
+  daianamsteams:
+    image: cloudseidoranalytics/daianamsteams:v2.1.5
+    container_name: daiana-msteams
+    restart: unless-stopped
+    platform: linux/arm64
+    environment:
+      DAIANA_URL: ${BACKEND_BASE_URL}
+    # command: /bin/sh -c "gunicorn --bind 0.0.0.0:3978 --worker-class aiohttp.worker.GunicornWebWorker --timeout 600 app:app"
+    tty: true
+    depends_on:
+      daianapython:
+        condition: service_healthy
+
+  daianawhatsapp:
+    container_name: daiana-whatsapp
+    image: cloudseidoranalytics/daianawhatsapp:v1.0.2
+    restart: unless-stopped
+    platform: linux/amd64
+    environment:
+      FLASK_ENV: production
+      PYTHONUNBUFFERED: 1
+      SECRET_KEY: ${WHATSAPP_SECRET_KEY}
+      HOST: 0.0.0.0
+      PORT: 3008
+      BACK_URL: ${BACKEND_BASE_URL}
+      HOME_URL: ${SUPABASE_PUBLIC_URL}
+      BOT_SECRET_KEY: ${BOT_SECRET_KEY}
+    volumes:
+      - ./volumes/daiana/whatsapp/log:/app/src/utils/log
+    # command: /bin/sh -c "gunicorn --bind 0.0.0.0:3008 --timeout 600 app:app"
+    tty: true
+    depends_on:
+      daianapython:
+        condition: service_healthy
+   
+  daianastudio:
+    image: cloudseidoranalytics/daianastudio:v3.1.2
+    container_name: daiana-studio
+    restart: unless-stopped
+    platform: linux/amd64
+    environment:
+      DATABASE_TYPE: ${POSTGRES_DB}
+      DATABASE_NAME: ${POSTGRES_DB}
+      DATABASE_HOST: ${POSTGRES_HOST}
+      DATABASE_PORT: ${POSTGRES_PORT}
+      DATABASE_USER: studio
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      FLOWISE_SECRETKEY_OVERWRITE: ${FLOWISE_SECRETKEY_OVERWRITE}
+      DEBUG: "true"
+      LOG_LEVEL: debug
+      LOG_PATH: /home/node/.flowise/logs
+      CORS_ORIGINS: ${SITE_URL}
+      IFRAME_ORIGINS: ${SITE_URL}
+      APP_URL: ${STUDIO_BASE_URL}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASS}
+      SMTP_SECURE: true
+      ALLOW_UNAUTHORIZED_CERTS: false
+      SENDER_EMAIL: ${SMTP_ADMIN_EMAIL}
+      EXPRESS_SESSION_SECRET: ${EXPRESS_SESSION_SECRET}
+      JWT_AUTH_TOKEN_SECRET: ${JWT_AUTH_TOKEN_SECRET}
+      JWT_REFRESH_TOKEN_SECRET: ${JWT_REFRESH_TOKEN_SECRET}
+      JWT_ISSUER: 'ISSUER'
+      JWT_AUDIENCE: 'AUDIENCE'
+      JWT_TOKEN_EXPIRY_IN_MINUTES: 360
+      JWT_REFRESH_TOKEN_EXPIRY_IN_MINUTES: 480
+      ALLOW_BUILTIN_DEP: true
+      TOOL_FUNCTION_BUILTIN_DEP: '*'
+      TOOL_FUNCTION_EXTERNAL_DEP: 'mssql'
+      STORAGE_TYPE: local
+      BLOB_STORAGE_PATH: /home/node/.flowise/storage      
+    volumes:
+      - ./volumes/daiana/flowise:/home/node/.flowise
+      - ./volumes/daiana/flowise/logs:/home/node/.flowise/logs
+    depends_on:
+      daianapython:
+        condition: service_healthy
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
+  daianawebui:
+    image: cloudseidoranalytics/daianawebui:dev
+    container_name: daiana-webui
+    platform: linux/amd64
+    volumes:
+      - ./volumes/daiana/webui/data:/app/backend/data
+    environment:
+      WEBUI_URL: ${WEBUI_BASE_URL}
+      CORS_ALLOW_ORIGIN: ${SITE_URL}
+      FORWARDED_ALLOW_IPS: '*'
+      SCARF_NO_ANALYTICS: true
+      DO_NOT_TRACK: true
+      ANONYMIZED_TELEMETRY: true
+      DATABASE_URL: postgres://webui:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+      HF_HUB_OFFLINE: 0
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      DEFAULT_USER_ROLE: user
+      VECTOR_DB: qdrant
+      QDRANT_URI: ${QDRANT_BASE_URL}
+      JWT_EXPIRES_IN: 6h
+      USER_AGENT: OpenWebUI/1.0
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE}
+      WEBUI_AUTH_HANDOFF_SECRET: 12nknsin6njxyuq>TQ
+      WEBUI_SESSION_COOKIE_SAME_SITE: none
+      WEBUI_SESSION_COOKIE_SECURE: True
+      WEBUI_AUTH_COOKIE_SAME_SITE: none
+      WEBUI_AUTH_COOKIE_SECURE: True
+    depends_on:
+      daianapython:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  default:
+    name: daiana-mgmt
+    external: true

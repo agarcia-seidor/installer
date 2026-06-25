@@ -1,0 +1,17 @@
+services:
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./volumes/portainer/data:/data
+    networks:
+      - daiana-mgmt
+
+networks:
+  daiana-mgmt:
+    external: true
+    name: daiana-mgmt

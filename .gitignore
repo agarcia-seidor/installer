@@ -1,0 +1,16 @@
+# Local Pi runtime state
+.atl/
+.pi/
+
+# Local environment / OS noise
+.env
+.DS_Store
+*.old
+
+# Generated runtime data
+volumes/db/data/
+volumes/storage/stub/
+volumes/daiana/
+volumes/portainer/
+volumes/api/server.*
+volumes/snippets/*.sql

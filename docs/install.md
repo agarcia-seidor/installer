@@ -1,0 +1,28 @@
+# Install
+
+```bash
+bash install-daiana.sh
+```
+
+What it does:
+- validates prerequisites
+- creates or restores `.env`
+- seeds Supabase keys when needed
+- asks for core credentials in logical groups
+- persists prompted values immediately
+- deploys Portainer and app stacks
+- creates NPM proxy hosts without TLS
+
+## Prompt order
+1. `BASE_DOMAIN`
+2. `NPM_ADMIN_EMAIL`
+3. `NPM_ADMIN_PASS`
+4. `PORTAINER_ADMIN_PASS`
+5. SMTP settings
+6. Google SSO enablement + credentials
+7. optional integrations
+
+## Important defaults
+- `NPM_ADMIN_EMAIL`: `admin@example.com`
+- `LICENSE_ACTIVATION_BASE_URL`: `https://license.example.com`
+- SMTP placeholders in `.env.example` are treated as empty on first run

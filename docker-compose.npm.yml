@@ -1,0 +1,23 @@
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:2.15.1
+    container_name: npm
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:81:81"   # admin panel restricted to localhost
+    environment:
+      TZ: "America/New_York"
+      INITIAL_ADMIN_EMAIL: ${NPM_ADMIN_EMAIL}
+      INITIAL_ADMIN_PASSWORD: ${NPM_ADMIN_PASS}
+    volumes:
+      - ./volumes/daiana/npm/npm_data:/data
+      - ./volumes/daiana/npm/npm_letsencrypt:/etc/letsencrypt
+    networks:
+      - daiana-mgmt
+
+networks:
+  daiana-mgmt:
+    external: true
+    name: daiana-mgmt
