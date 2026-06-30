@@ -966,9 +966,17 @@ run_psql_file() {
   local schema="$1"
   local db_user="$2"
   local file="$3"
+  local uri="$4"
+  shift 4
   local tables=""
+  local psql_vars=()
 
   command -v docker >/dev/null 2>&1 || die "docker is required to run Supabase init SQL"
+
+  while [ "$#" -gt 0 ]; do
+    psql_vars+=( -v "$1=$2" )
+    shift 2
+  done
 
   if [ "$schema" != "-" ] && [ -n "$schema" ]; then
     tables="$(docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -Atqc "SELECT string_agg(format('%I.%I', schemaname, tablename), ', ') FROM pg_tables WHERE schemaname = '$schema';")"
@@ -976,7 +984,7 @@ run_psql_file() {
       docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "TRUNCATE $tables RESTART IDENTITY CASCADE"
     fi
   fi
-  docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
+  docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" "${psql_vars[@]}" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
 }
 
 run_supabase_init_sql() {
@@ -993,6 +1001,7 @@ run_supabase_init_sql() {
     "public:supabase_admin:volumes/db/init/public.sql"
     "studio:supabase_admin:volumes/db/init/studio.sql"
     "webui:supabase_admin:volumes/db/init/webui.sql"
+    "-:supabase_admin:volumes/db/init/vault.sql"
   )
 
   mkdir -p .atl
@@ -1005,7 +1014,26 @@ run_supabase_init_sql() {
     file="${entry#*:}"
     [ -f "$file" ] || die "Missing SQL file: $file"
     log "Applying $file"
-    run_psql_file "$schema" "$db_user" "$file" "$uri"
+    case "$file" in
+      *vault.sql)
+        local -a vault_psql_vars=(
+          supabase_public_url "$SUPABASE_PUBLIC_URL"
+          next_public_api_python "$BACKEND_BASE_URL"
+          next_public_api_training "$VANNA_BASE_URL"
+          next_public_api_qdrant "$QDRANT_BASE_URL"
+          next_public_api_msteams "$MS_BASE_URL"
+          next_public_api_whatsapp "$WS_BASE_URL"
+          next_public_api_studio_base_url "$STUDIO_BASE_URL"
+          next_public_webui_url "$WEBUI_BASE_URL"
+          next_public_app_url "$NEXT_PUBLIC_APP_URL"
+          cors_allow_origin "$CORS_ALLOW_ORIGIN"
+        )
+        run_psql_file "$schema" "$db_user" "$file" "$uri" "${vault_psql_vars[@]}"
+        ;;
+      *)
+        run_psql_file "$schema" "$db_user" "$file" "$uri"
+        ;;
+    esac
   done
   : > "$sentinel"
 }
@@ -1020,7 +1048,7 @@ Would:
 - create/update Portainer stack: $NPM_STACK_NAME from docker-compose.npm.yml
 - create/update Portainer stack: $APP_STACK_NAME from ${SUPABASE_COMPOSE_FILES[*]}
 - wait for core Supabase to become healthy
-- run init SQL in order: schemas, auth, public, studio, webui, data, functions
+- run init SQL in order: schemas, auth, public, studio, webui, vault, functions
 - create/update Portainer stack: $APP_STACK_NAME from ${APP_COMPOSE_FILES[*]}
 - wait for NPM at $NPM_URL/api
 - create proxy hosts without TLS:
