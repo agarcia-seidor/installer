@@ -35,8 +35,7 @@ services:
     volumes:
       # Always use a fresh database when developing
       - /var/lib/postgresql/data
-      # Seed data should be inserted last (alphabetical order)
-      - ./dev/data.sql:/docker-entrypoint-initdb.d/seed.sql
+      # Dev data is no longer mounted into /docker-entrypoint-initdb.d; keep it out of the init path.
   storage:
     volumes:
       - /var/lib/storage

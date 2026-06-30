@@ -76,14 +76,31 @@ fi
 echo "===> Cleaning up bind-mounted directories..."
 BIND_MOUNTS="./volumes/db/data ./volumes/storage"
 
-for dir in $BIND_MOUNTS; do
-    if [ -d "$dir" ]; then
-        echo "Removing $dir..."
-        confirm
-        rm -rf "$dir"
-    else
+remove_bind_mount() {
+    dir="$1"
+    if [ ! -d "$dir" ]; then
         echo "$dir not found."
+        return 0
     fi
+    echo "Removing $dir..."
+    confirm
+    if rm -rf "$dir" 2>/dev/null; then
+        return 0
+    fi
+    echo "Permission denied removing $dir"
+    if command -v sudo >/dev/null 2>&1; then
+        sudo rm -rf "$dir" || {
+            echo "Failed to remove $dir even with sudo."
+            exit 1
+        }
+    else
+        echo "Run manually: sudo rm -rf $dir"
+        exit 1
+    fi
+}
+
+for dir in $BIND_MOUNTS; do
+    remove_bind_mount "$dir"
 done
 
 echo "===> Resetting .env file (will keep .env.old if it already exists)..."

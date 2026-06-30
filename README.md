@@ -29,9 +29,9 @@ The guide covers:
 - `git`
 - `docker`
 - Docker Compose (`docker compose` or `docker-compose`)
-- `curl`, `jq`, `openssl`
+- `curl`, `jq`, `openssl`, `psql`, `supabase`
 
-The installer checks these first and, when possible, offers to install missing `curl`, `jq`, `openssl`, and Compose packages automatically.
+The installer checks these first and, when possible, offers to install missing `curl`, `jq`, `openssl`, `psql`, `supabase`, and Compose packages automatically.
 
 The repo includes a Makefile for the common Supabase + Daiana flow:
 

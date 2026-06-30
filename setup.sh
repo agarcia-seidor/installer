@@ -3,10 +3,11 @@
 # Bootstrap a self-hosted Supabase project on Linux (Debian/Ubuntu or RHEL/CentOS/Fedora).
 #
 # What it does:
-#   1. Installs prerequisites: git, openssl, jq, ca-certificates
+#   1. Installs prerequisites: git, curl, openssl, jq, ca-certificates, postgresql-client
 #   2. Installs Docker Engine + Compose plugin (if missing)
-#   3. Optionally installs the AWS CLI v2 (--with-aws)
-#   4. Sparse-clones the repo to extract the contents of ./docker
+#   3. Installs the Supabase CLI
+#   4. Optionally installs the AWS CLI v2 (--with-aws)
+#   5. Sparse-clones the repo to extract the contents of ./docker
 #   5. Creates a project directory in CWD and copies docker/* into it
 #   6. Prompts for the main URLs and writes them to .env
 #   7. Generates secrets and asymmetric API keys via utils/*.sh
@@ -119,14 +120,40 @@ pkg_install() {
 }
 
 install_base_packages() {
-    log "Installing base packages: git, openssl, jq, ca-certificates"
+    log "Installing base packages: git, curl, openssl, jq, ca-certificates, psql"
     pkg_update
     if [ "$OS_FAMILY" = "debian" ]; then
-        pkg_install git openssl jq ca-certificates \
+        pkg_install git curl openssl jq ca-certificates postgresql-client \
             apt-transport-https gnupg lsb-release
     else
-        pkg_install git openssl jq ca-certificates dnf-plugins-core
+        pkg_install git curl openssl jq ca-certificates postgresql dnf-plugins-core
     fi
+}
+
+install_supabase_cli() {
+    local install_dir tmp installer
+    if [ "$(id -u)" -eq 0 ]; then
+        install_dir="${SUPABASE_INSTALL_DIR:-/usr/local/bin}"
+    else
+        install_dir="${SUPABASE_INSTALL_DIR:-$HOME/.supabase/bin}"
+    fi
+
+    command -v supabase >/dev/null 2>&1 && return 0
+
+    log "Installing Supabase CLI"
+    tmp="$(mktemp)"
+    installer="https://raw.githubusercontent.com/supabase/cli/main/install"
+    curl -fsSL "$installer" -o "$tmp"
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+        sudo env SUPABASE_INSTALL_DIR="$install_dir" bash "$tmp" --install-dir "$install_dir" --no-modify-path
+    else
+        SUPABASE_INSTALL_DIR="$install_dir" bash "$tmp" --install-dir "$install_dir" --no-modify-path
+    fi
+    rm -f "$tmp"
+    case ":$PATH:" in
+        *":$install_dir:"*) ;;
+        *) PATH="$install_dir:$PATH"; export PATH ;;
+    esac
 }
 
 docker_present() {
@@ -245,6 +272,8 @@ else
     install_docker
 fi
 
+install_supabase_cli
+
 if [ "$WITH_AWS" = "1" ]; then
     install_aws
 fi
@@ -322,7 +351,7 @@ log "Generating secrets and legacy API keys"
 sh utils/generate-keys.sh --update-env
 
 log "Generating asymmetric key pair and opaque API keys"
-sh utils/add-new-auth-keys.sh --update-env
+bash utils/add-new-auth-keys.sh --update-env
 
 log "Pulling Docker images"
 docker compose pull || warn "docker compose pull failed; you can retry later."

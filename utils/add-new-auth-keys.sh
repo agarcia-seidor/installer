@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Add asymmetric key pair and opaque API keys to a self-hosted Supabase installation.
 #
@@ -8,9 +8,9 @@
 #   - Internal: ES256 JWT API keys (ANON_KEY_ASYMMETRIC, SERVICE_ROLE_KEY_ASYMMETRIC)
 #
 # Usage:
-#   sh add-new-auth-keys.sh              # Interactive: prints keys, prompts to update .env
-#   sh add-new-auth-keys.sh --update-env # Prints keys and writes them to .env
-#   sh add-new-auth-keys.sh | tee keys   # Non-interactive: prints keys only
+#   bash add-new-auth-keys.sh              # Interactive: prints keys, prompts to update .env
+#   bash add-new-auth-keys.sh --update-env # Prints keys and writes them to .env
+#   bash add-new-auth-keys.sh | tee keys   # Non-interactive: prints keys only
 #
 # Prerequisites:
 #   - .env file with JWT_SECRET set (run generate-keys.sh first)

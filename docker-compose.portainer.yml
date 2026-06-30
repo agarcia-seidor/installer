@@ -3,6 +3,7 @@ services:
     image: portainer/portainer-ce:lts
     container_name: portainer
     restart: unless-stopped
+    command: --no-setup-token
     ports:
       - "127.0.0.1:9000:9000"
     volumes:

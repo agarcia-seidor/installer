@@ -49,21 +49,75 @@ prompt_yes_no() {
   esac
 }
 
+install_supabase_cli() {
+  local install_dir tmp installer
+  if [ "$(id -u)" -eq 0 ]; then
+    install_dir="${SUPABASE_INSTALL_DIR:-/usr/local/bin}"
+  else
+    install_dir="${SUPABASE_INSTALL_DIR:-$HOME/.supabase/bin}"
+  fi
+
+  tmp="$(mktemp)"
+  installer="https://raw.githubusercontent.com/supabase/cli/main/install"
+  curl -fsSL "$installer" -o "$tmp"
+  if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    sudo env SUPABASE_INSTALL_DIR="$install_dir" bash "$tmp" --install-dir "$install_dir" --no-modify-path
+  else
+    SUPABASE_INSTALL_DIR="$install_dir" bash "$tmp" --install-dir "$install_dir" --no-modify-path
+  fi
+  rm -f "$tmp"
+  case ":$PATH:" in
+    *":$install_dir:"*) ;;
+    *) PATH="$install_dir:$PATH"; export PATH ;;
+  esac
+}
+
 install_prereq_packages() {
   local pkg_mgr="$1"
   shift
+  local apt_packages=() brew_packages=() need_supabase_cli=0 pkg
+
   case "$pkg_mgr" in
     brew)
       if ! command -v brew >/dev/null 2>&1; then
         return 1
       fi
-      brew install "$@"
+      for pkg in "$@"; do
+        case "$pkg" in
+          psql) brew_packages+=("libpq") ;;
+          supabase) brew_packages+=("supabase/tap/supabase") ;;
+          *) brew_packages+=("$pkg") ;;
+        esac
+      done
+      if [ "${#brew_packages[@]}" -gt 0 ]; then
+        brew install "${brew_packages[@]}"
+      fi
+      local prefix
+      for pkg in "${brew_packages[@]}"; do
+        prefix="$(brew --prefix "$pkg" 2>/dev/null || true)"
+        if [ -n "$prefix" ] && [ -d "$prefix/bin" ]; then
+          PATH="$prefix/bin:$PATH"
+        fi
+      done
+      export PATH
       ;;
     apt)
-      if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
-        sudo apt-get update && sudo apt-get install -y "$@"
-      else
-        apt-get update && apt-get install -y "$@"
+      for pkg in "$@"; do
+        case "$pkg" in
+          psql) apt_packages+=("postgresql-client") ;;
+          supabase) need_supabase_cli=1 ;;
+          *) apt_packages+=("$pkg") ;;
+        esac
+      done
+      if [ "${#apt_packages[@]}" -gt 0 ]; then
+        if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+          sudo apt-get update && sudo apt-get install -y "${apt_packages[@]}"
+        else
+          apt-get update && apt-get install -y "${apt_packages[@]}"
+        fi
+      fi
+      if [ "$need_supabase_cli" = "1" ]; then
+        install_supabase_cli
       fi
       ;;
     *) return 1 ;;
@@ -74,7 +128,7 @@ ensure_prerequisites() {
   local missing=() installable=() manual=() pkg_mgr=""
   local cmd
 
-  for cmd in git curl jq openssl docker; do
+  for cmd in git curl jq openssl docker psql supabase; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi
@@ -101,7 +155,7 @@ ensure_prerequisites() {
 
   for cmd in "${missing[@]}"; do
     case "$cmd" in
-      git|curl|jq|openssl|docker-compose)
+      git|curl|jq|openssl|docker-compose|psql|supabase)
         installable+=("$cmd")
         ;;
       docker)
@@ -116,13 +170,16 @@ ensure_prerequisites() {
       case "$pkg_mgr:$cmd" in
         brew:openssl) pretty+=("openssl@3") ;;
         brew:git|apt:git) pretty+=("git") ;;
+        brew:psql) pretty+=("libpq") ;;
         apt:docker-compose) pretty+=("docker-compose-plugin") ;;
+        apt:psql) pretty+=("postgresql-client") ;;
+        brew:supabase) pretty+=("supabase/tap/supabase") ;;
         *) pretty+=("$cmd") ;;
       esac
     done
     if prompt_yes_no "Install missing prerequisites via $pkg_mgr: ${pretty[*]}?"; then
       CURRENT_PHASE="installing prerequisites"
-      if ! install_prereq_packages "$pkg_mgr" "${pretty[@]}"; then
+      if ! install_prereq_packages "$pkg_mgr" "${installable[@]}"; then
         die "Could not install prerequisites via $pkg_mgr"
       fi
       log "Prerequisites installed"
@@ -137,7 +194,7 @@ ensure_prerequisites() {
         export PATH
       fi
       missing=()
-      for cmd in curl jq openssl docker; do
+      for cmd in curl jq openssl docker psql supabase; do
         command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
       done
       if command -v docker >/dev/null 2>&1; then
@@ -167,11 +224,13 @@ APP_STACK_NAME="${APP_STACK_NAME:-daiana-app}"
 PORTAINER_ADMIN_USER="${PORTAINER_ADMIN_USER:-admin}"
 
 CREATED_ENV=0
+RESTORED_ENV=0
 if [ ! -f .env ]; then
   if [ -f .env.old ]; then
     log "Restoring .env from .env.old"
     cp .env.old .env
     CREATED_ENV=1
+    RESTORED_ENV=1
   elif [ -f .env.example ]; then
     log "Creating .env from .env.example"
     cp .env.example .env
@@ -260,8 +319,8 @@ seed_supabase_env() {
     fi
 
     CURRENT_PHASE="generating asymmetric auth keys"
-    log "Running sh utils/add-new-auth-keys.sh --update-env"
-    if ! sh utils/add-new-auth-keys.sh --update-env >/dev/null; then
+    log "Running bash utils/add-new-auth-keys.sh --update-env"
+    if ! bash utils/add-new-auth-keys.sh --update-env >/dev/null; then
       die "Failed to generate Supabase asymmetric auth keys"
     fi
 
@@ -329,7 +388,7 @@ generate_password() {
   upper="$( (set +o pipefail; LC_ALL=C tr -dc 'A-Z' </dev/urandom | head -c 1) )"
   lower="$( (set +o pipefail; LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 1) )"
   digit="$( (set +o pipefail; LC_ALL=C tr -dc '0-9' </dev/urandom | head -c 1) )"
-  special="$( (set +o pipefail; LC_ALL=C tr -dc '!@#$%^&*_-+=?' </dev/urandom | head -c 1) )"
+  special="$( (set +o pipefail; LC_ALL=C tr -dc '!@#$%^&*_=+?-' </dev/urandom | head -c 1) )"
   body="$( (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$body_len") )"
   printf '%s%s%s%s%s' "$body" "$upper" "$lower" "$digit" "$special"
 }
@@ -392,9 +451,6 @@ seed_daiana_env() {
   log "Checking Daiana-specific values"
   local changed=0
   local public_scheme="https"
-  case "$BASE_DOMAIN" in
-    *nip.io*) public_scheme="http" ;;
-  esac
   log "Public URL scheme for BASE_DOMAIN is $public_scheme"
   ensure_default() {
     local var="$1"
@@ -427,7 +483,7 @@ seed_daiana_env() {
   ensure_derived() {
     local var="$1"
     local value="$2"
-    if [ "${!var:-}" != "$value" ]; then
+    if [ -z "${!var:-}" ]; then
       printf -v "$var" '%s' "$value"
       export "$var"
       if [ "$DRY_RUN" != "1" ]; then
@@ -519,20 +575,24 @@ prompt_required SMTP_USER 'SMTP_USER'
 prompt_required SMTP_PASS 'SMTP_PASS'
 
 log "Prompting Google SSO"
-if prompt_yes_no "Enable Google SSO? (yes/si/sí)" "n"; then
-  GOOGLE_ENABLED="true"
-  export GOOGLE_ENABLED
-  if [ "$DRY_RUN" != "1" ]; then
-    persist_env_value GOOGLE_ENABLED "$GOOGLE_ENABLED"
+if [ "$CREATED_ENV" = "1" ] && [ "$RESTORED_ENV" = "0" ]; then
+  if prompt_yes_no "Enable Google SSO? (y/N)" "n"; then
+    GOOGLE_ENABLED="true"
+    export GOOGLE_ENABLED
+    if [ "$DRY_RUN" != "1" ]; then
+      persist_env_value GOOGLE_ENABLED "$GOOGLE_ENABLED"
+    fi
+    prompt_required GOOGLE_CLIENT_ID 'GOOGLE_CLIENT_ID'
+    prompt_required GOOGLE_SECRET 'GOOGLE_SECRET'
+  else
+    GOOGLE_ENABLED="false"
+    export GOOGLE_ENABLED
+    if [ "$DRY_RUN" != "1" ]; then
+      persist_env_value GOOGLE_ENABLED "$GOOGLE_ENABLED"
+    fi
   fi
-  prompt_required GOOGLE_CLIENT_ID 'GOOGLE_CLIENT_ID'
-  prompt_required GOOGLE_SECRET 'GOOGLE_SECRET'
 else
-  GOOGLE_ENABLED="false"
-  export GOOGLE_ENABLED
-  if [ "$DRY_RUN" != "1" ]; then
-    persist_env_value GOOGLE_ENABLED "$GOOGLE_ENABLED"
-  fi
+  log "Reinstall detected; keeping existing Google SSO settings without prompting"
 fi
 
 log "Prompting optional integrations"
@@ -542,14 +602,14 @@ prompt_optional CREDENTIAL_YT 'CREDENTIAL_YT (optional)'
 prompt_optional LICENSE_ACTIVATION_BASE_URL 'LICENSE_ACTIVATION_BASE_URL (optional)' 'https://license.example.com'
 CURRENT_PHASE="seeding Daiana env"
 seed_daiana_env
-if [ -n "${GOOGLE_CLIENT_ID:-}" ] || [ -n "${GOOGLE_SECRET:-}" ]; then
+if [ "$CREATED_ENV" = "1" ] && [ "$RESTORED_ENV" = "0" ] && [ -n "${GOOGLE_CLIENT_ID:-}" ] && [ -n "${GOOGLE_SECRET:-}" ]; then
   if [ "${GOOGLE_ENABLED:-false}" != "true" ]; then
     GOOGLE_ENABLED="true"
     export GOOGLE_ENABLED
     if [ "$DRY_RUN" != "1" ]; then
       persist_env_value GOOGLE_ENABLED "$GOOGLE_ENABLED"
     fi
-    log "Enabled Google SSO because Google credentials were provided"
+    log "Enabled Google SSO because both Google credentials were provided"
   fi
 fi
 
@@ -795,6 +855,33 @@ ensure_network() {
   fi
 }
 
+ensure_flowise_storage_permissions() {
+  local flowise_root="./volumes/daiana"
+  local flowise_dir="$flowise_root/flowise"
+  if mkdir -p "$flowise_dir" 2>/dev/null; then
+    :
+  else
+    log "Cannot create $flowise_dir"
+    if prompt_yes_no "Fix Flowise permissions with sudo chown -R 1000:1000 $flowise_root now?" "y"; then
+      if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+        sudo chown -R 1000:1000 "$flowise_root"
+      else
+        chown -R 1000:1000 "$flowise_root"
+      fi
+      mkdir -p "$flowise_dir" || die "Could not create $flowise_dir even after fixing permissions"
+    else
+      die "Cannot continue until $flowise_dir is writable"
+    fi
+  fi
+  if [ "$(id -u)" -eq 0 ]; then
+    chown -R 1000:1000 "$flowise_root"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo chown -R 1000:1000 "$flowise_root"
+  else
+    log "Skipping ownership change for $flowise_root (no sudo available)"
+  fi
+}
+
 bootstrap_portainer() {
   log "Starting Portainer bootstrap container"
   "${COMPOSE_CMD[@]}" -f docker-compose.portainer.yml up -d
@@ -815,7 +902,113 @@ bootstrap_portainer() {
   [ -n "$PORTAINER_ENDPOINT_ID" ] || die "Could not determine Portainer endpoint id"
 }
 
+SUPABASE_COMPOSE_FILES=(docker-compose.yml)
 APP_COMPOSE_FILES=(docker-compose.yml docker-compose.app.yml)
+
+SUPABASE_CORE_CONTAINERS=(
+  supabase-studio
+  supabase-kong
+  supabase-auth
+  supabase-rest
+  realtime-dev.supabase-realtime
+  supabase-storage
+  supabase-imgproxy
+  supabase-meta
+  supabase-edge-functions
+  supabase-db
+  supabase-pooler
+)
+
+container_health_status() {
+  local name="$1"
+  docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{if .State.Running}}running{{else}}{{.State.Status}}{{end}}{{end}}' "$name" 2>/dev/null || true
+}
+
+wait_for_supabase_ready() {
+  local max_tries="${1:-240}"
+  local delay="${2:-2}"
+  local i=1
+  while [ "$i" -le "$max_tries" ]; do
+    local pending=() name status
+    for name in "${SUPABASE_CORE_CONTAINERS[@]}"; do
+      status="$(container_health_status "$name")"
+      case "$status" in
+        healthy|running) ;;
+        "") pending+=("$name:missing") ;;
+        *) pending+=("$name:$status") ;;
+      esac
+    done
+    if [ "${#pending[@]}" -eq 0 ]; then
+      log "Supabase core is ready"
+      return 0
+    fi
+    if [ "$i" -eq 1 ] || [ $((i % 10)) -eq 0 ]; then
+      log "Waiting for Supabase core... ($i/$max_tries)"
+      log "Pending: ${pending[*]}"
+    fi
+    sleep "$delay"
+    i=$((i + 1))
+  done
+  return 1
+}
+
+postgres_connection_uri() {
+  [ -n "${POOLER_TENANT_ID:-}" ] || die "POOLER_TENANT_ID is required to run init SQL"
+  [ -n "${POSTGRES_PASSWORD:-}" ] || die "POSTGRES_PASSWORD is required to run init SQL"
+  [ -n "${POSTGRES_PORT:-}" ] || die "POSTGRES_PORT is required to run init SQL"
+  [ -n "${POSTGRES_DB:-}" ] || die "POSTGRES_DB is required to run init SQL"
+  local host="${SUPABASE_DB_HOST:-supabase-pooler}"
+  [ -n "$host" ] || die "Could not determine the Supabase DB host for init SQL"
+  printf 'postgresql://postgres.%s:%s@%s:%s/%s' "$POOLER_TENANT_ID" "$POSTGRES_PASSWORD" "$host" "$POSTGRES_PORT" "$POSTGRES_DB"
+}
+
+run_psql_file() {
+  local schema="$1"
+  local db_user="$2"
+  local file="$3"
+  local tables=""
+
+  command -v docker >/dev/null 2>&1 || die "docker is required to run Supabase init SQL"
+
+  if [ "$schema" != "-" ] && [ -n "$schema" ]; then
+    tables="$(docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -Atqc "SELECT string_agg(format('%I.%I', schemaname, tablename), ', ') FROM pg_tables WHERE schemaname = '$schema';")"
+    if [ -n "$tables" ]; then
+      docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "TRUNCATE $tables RESTART IDENTITY CASCADE"
+    fi
+  fi
+  docker exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
+}
+
+run_supabase_init_sql() {
+  local sentinel=".atl/install-daiana.init-sql.done"
+  local uri entry schema file
+  if [ -f "$sentinel" ]; then
+    log "Supabase data seed SQL already applied; skipping"
+    return 0
+  fi
+
+  uri="$(postgres_connection_uri)"
+  local sql_files=(
+    "auth:supabase_admin:volumes/db/init/auth.sql"
+    "public:supabase_admin:volumes/db/init/public.sql"
+    "studio:supabase_admin:volumes/db/init/studio.sql"
+    "webui:supabase_admin:volumes/db/init/webui.sql"
+  )
+
+  mkdir -p .atl
+  CURRENT_PHASE="running Supabase data seed SQL"
+  log "Running data seeds against the healthy Supabase tenant connection"
+  for entry in "${sql_files[@]}"; do
+    schema="${entry%%:*}"
+    entry="${entry#*:}"
+    db_user="${entry%%:*}"
+    file="${entry#*:}"
+    [ -f "$file" ] || die "Missing SQL file: $file"
+    log "Applying $file"
+    run_psql_file "$schema" "$db_user" "$file" "$uri"
+  done
+  : > "$sentinel"
+}
 
 if [ "$ACTION" = "install" ] && [ "$DRY_RUN" = "1" ]; then
   cat <<EOF
@@ -825,6 +1018,9 @@ Would:
 - start Portainer bootstrap container from docker-compose.portainer.yml
 - initialize/authenticate Portainer admin
 - create/update Portainer stack: $NPM_STACK_NAME from docker-compose.npm.yml
+- create/update Portainer stack: $APP_STACK_NAME from ${SUPABASE_COMPOSE_FILES[*]}
+- wait for core Supabase to become healthy
+- run init SQL in order: schemas, auth, public, studio, webui, data, functions
 - create/update Portainer stack: $APP_STACK_NAME from ${APP_COMPOSE_FILES[*]}
 - wait for NPM at $NPM_URL/api
 - create proxy hosts without TLS:
@@ -886,7 +1082,20 @@ fi
 log "Deploying NPM stack via Portainer"
 portainer_upsert_stack "$NPM_STACK_NAME" "$NPM_STACK_ENV_JSON" docker-compose.npm.yml
 
-log "Deploying Daiana/Supabase stack via Portainer"
+log "Deploying core Supabase stack via Portainer"
+portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "${SUPABASE_COMPOSE_FILES[@]}"
+
+CURRENT_PHASE="waiting for core Supabase"
+wait_for_supabase_ready 240 2 || die "Supabase core did not become ready"
+
+if [ "$ACTION" = "install" ]; then
+  run_supabase_init_sql
+fi
+
+log "Applying Flowise storage ownership"
+ensure_flowise_storage_permissions
+
+log "Deploying Daiana app stack via Portainer"
 portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "${APP_COMPOSE_FILES[@]}"
 
 log "Waiting for NPM API"

@@ -11,6 +11,7 @@ What it does:
 - asks for core credentials in logical groups
 - persists prompted values immediately
 - deploys Portainer and app stacks
+- runs init SQL once after Supabase is healthy (auth, public, studio, webui)
 - creates NPM proxy hosts without TLS
 
 ## Prompt order

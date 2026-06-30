@@ -19,6 +19,60 @@ done
 log() { printf '===> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+resolve_domain_for_prefix() {
+  local prefix="$1"
+  if [[ "$BASE_DOMAIN" == "${prefix}."* ]]; then
+    printf '%s' "$BASE_DOMAIN"
+  else
+    printf '%s.%s' "$prefix" "$BASE_DOMAIN"
+  fi
+}
+
+sanitize_tls_suffix() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-'
+}
+
+local_cert_paths_for_prefix() {
+  local prefix="$1"
+  local cert_path key_path cert_dir key_dir cert_base key_base cert_ext key_ext suffix
+  suffix="$(sanitize_tls_suffix "$prefix")"
+  cert_path="${NPM_LOCAL_CERT_FILE/#~/$HOME}"
+  key_path="${NPM_LOCAL_KEY_FILE/#~/$HOME}"
+  cert_dir="$(dirname "$cert_path")"
+  key_dir="$(dirname "$key_path")"
+  cert_base="$(basename "$cert_path")"
+  key_base="$(basename "$key_path")"
+  cert_ext=""
+  key_ext=""
+  case "$cert_base" in
+    *.*) cert_ext=".${cert_base##*.}"; cert_base="${cert_base%.*}" ;;
+  esac
+  case "$key_base" in
+    *.*) key_ext=".${key_base##*.}"; key_base="${key_base%.*}" ;;
+  esac
+  printf '%s\n%s\n' "${cert_dir}/${cert_base}-${suffix}${cert_ext}" "${key_dir}/${key_base}-${suffix}${key_ext}"
+}
+
+ensure_local_certificate_files() {
+  local domain="$1"
+  local cert_path="${NPM_LOCAL_CERT_FILE/#~/$HOME}"
+  local key_path="${NPM_LOCAL_KEY_FILE/#~/$HOME}"
+
+  if [ -f "$cert_path" ] && [ -f "$key_path" ]; then
+    return 0
+  fi
+
+  command -v openssl >/dev/null 2>&1 || die "openssl is required to generate local certificates"
+  log "Generating local self-signed certificate for $domain"
+  mkdir -p "$(dirname "$cert_path")"
+  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout "$key_path" \
+    -out "$cert_path" \
+    -subj "/CN=$domain" >/dev/null 2>&1
+  chmod 640 "$key_path"
+  chgrp 65533 "$key_path" 2>/dev/null || true
+}
+
 prompt() {
   local label="$1"
   local default_value="${2:-}"
@@ -116,8 +170,14 @@ EOF
 fi
 
 if [ "$TLS_MODE" = "local" ]; then
-  [ -f "$NPM_LOCAL_CERT_FILE" ] || die "Certificate file not found: $NPM_LOCAL_CERT_FILE"
-  [ -f "$NPM_LOCAL_KEY_FILE" ] || die "Key file not found: $NPM_LOCAL_KEY_FILE"
+  if [ -n "${ONLY_PREFIX:-}" ]; then
+    set -- $(local_cert_paths_for_prefix "$ONLY_PREFIX")
+    NPM_LOCAL_CERT_FILE="$1"
+    NPM_LOCAL_KEY_FILE="$2"
+    ensure_local_certificate_files "$(resolve_domain_for_prefix "$ONLY_PREFIX")"
+  else
+    ensure_local_certificate_files "$BASE_DOMAIN"
+  fi
   log "Applying local self-signed certificates in NPM"
 elif [ "$TLS_MODE" = "custom" ]; then
   [ -f "$NPM_CUSTOM_CERT_FILE" ] || die "Certificate file not found: $NPM_CUSTOM_CERT_FILE"
@@ -128,6 +188,6 @@ else
 fi
 
 BASE_DOMAIN="$BASE_DOMAIN" NPM_ADMIN_EMAIL="$NPM_ADMIN_EMAIL" NPM_ADMIN_PASS="$NPM_ADMIN_PASS" \
-TLS_MODE="$TLS_MODE" ENSURE_PROXY_HOSTS=0 NPM_LOCAL_CERT_FILE="$NPM_LOCAL_CERT_FILE" NPM_LOCAL_KEY_FILE="$NPM_LOCAL_KEY_FILE" \
+TLS_MODE="$TLS_MODE" ENSURE_PROXY_HOSTS=0 ONLY_PREFIX="${ONLY_PREFIX:-}" NPM_LOCAL_CERT_FILE="$NPM_LOCAL_CERT_FILE" NPM_LOCAL_KEY_FILE="$NPM_LOCAL_KEY_FILE" \
 NPM_CUSTOM_CERT_NAME="$NPM_CUSTOM_CERT_NAME" NPM_CUSTOM_CERT_FILE="$NPM_CUSTOM_CERT_FILE" NPM_CUSTOM_KEY_FILE="$NPM_CUSTOM_KEY_FILE" \
   bash utils/npm_ssl_bootstrap.sh
