@@ -31,7 +31,7 @@ The guide covers:
 - Docker Compose (`docker compose` or `docker-compose`)
 - `curl`, `jq`, `openssl`, `psql`, `supabase`
 
-The installer checks these first and, when possible, offers to install missing `docker` (Linux), `curl`, `jq`, `openssl`, `psql`, `supabase`, and Compose packages automatically.
+The installer checks these first and, when possible, offers to install missing `docker` (Linux), `curl`, `jq`, `openssl`, `psql`, `supabase`, and Compose packages automatically. If the Daiana images are private, it will also prompt for Docker Hub credentials (username + PAT) so Portainer can pull them.
 
 The repo includes a Makefile for the common Supabase + Daiana flow:
 

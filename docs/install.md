@@ -8,6 +8,7 @@ What it does:
 - validates prerequisites and can auto-install missing Linux dependencies with approval (including Docker Engine + Compose plugin)
 - creates or restores `.env`
 - seeds Supabase keys when needed
+- prompts for Docker Hub credentials when the Daiana images need private registry access
 - asks for core credentials in logical groups
 - persists prompted values immediately
 - deploys Portainer and app stacks

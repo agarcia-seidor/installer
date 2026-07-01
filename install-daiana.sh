@@ -329,6 +329,7 @@ NPM_URL="${NPM_URL:-http://127.0.0.1:81}"
 PORTAINER_STACK_NAME="${PORTAINER_STACK_NAME:-portainer-bootstrap}"
 NPM_STACK_NAME="${NPM_STACK_NAME:-npm-bootstrap}"
 APP_STACK_NAME="${APP_STACK_NAME:-daiana-app}"
+DAIANA_REGISTRY_NAME="${DAIANA_REGISTRY_NAME:-daiana-images}"
 PORTAINER_ADMIN_USER="${PORTAINER_ADMIN_USER:-admin}"
 
 CREATED_ENV=0
@@ -458,6 +459,20 @@ prompt() {
   fi
   if [ -z "$reply" ]; then
     reply="$default_value"
+  fi
+  printf '%s' "$reply"
+}
+
+prompt_secret() {
+  local label="$1"
+  local reply=""
+  if [ -t 0 ] && [ -r /dev/tty ]; then
+    printf '%s: ' "$label" >&2
+    stty_state="$(stty -g </dev/tty 2>/dev/null || true)"
+    stty -echo </dev/tty 2>/dev/null || true
+    read -r reply </dev/tty
+    [ -n "$stty_state" ] && stty "$stty_state" </dev/tty 2>/dev/null || true
+    printf '\n' >&2
   fi
   printf '%s' "$reply"
 }
@@ -898,6 +913,47 @@ portainer_get() {
   portainer_request_json GET "$path"
 }
 
+portainer_registry_id() {
+  local registry_name="$1"
+  portainer_get '/api/registries' | jq -r --arg name "$registry_name" '
+    (if type == "object" and has("data") then .data else . end)
+    | .[]?
+    | select(.Name == $name or (.URL == "registry-1.docker.io" and .Type == 6))
+    | .Id
+  ' | head -n1
+}
+
+portainer_ensure_private_registry() {
+  local registry_name="$DAIANA_REGISTRY_NAME"
+  local registry_id=""
+  registry_id="$(portainer_registry_id "$registry_name" || true)"
+  if [ -n "$registry_id" ] && [ "$registry_id" != "null" ]; then
+    printf '[%s]' "$registry_id"
+    return 0
+  fi
+
+  local registry_user="${DAIANA_REGISTRY_USERNAME:-}"
+  local registry_pat="${DAIANA_REGISTRY_PAT:-}"
+  if [ -z "$registry_user" ]; then
+    registry_user="$(prompt 'Docker Hub username for private Daiana images' '')"
+  fi
+  if [ -z "$registry_pat" ]; then
+    registry_pat="$(prompt_secret 'Docker Hub PAT for private Daiana images')"
+  fi
+  [ -n "$registry_user" ] || die 'Docker Hub username is required for private Daiana images'
+  [ -n "$registry_pat" ] || die 'Docker Hub PAT is required for private Daiana images'
+
+  local body
+  body="$(jq -n \
+    --arg name "$registry_name" \
+    --arg username "$registry_user" \
+    --arg password "$registry_pat" \
+    '{Name:$name, URL:"registry-1.docker.io", Type:6, Authentication:true, Username:$username, Password:$password}')"
+  registry_id="$(portainer_request_json POST /api/registries "$body" | jq -r '.Id // .id // empty')"
+  [ -n "$registry_id" ] || die 'Could not create Portainer registry for private Daiana images'
+  printf '[%s]' "$registry_id"
+}
+
 portainer_endpoint_id() {
   portainer_get '/api/endpoints' | jq -r '
     (if type == "object" and has("data") then .data else . end)
@@ -937,13 +993,17 @@ portainer_stack_id() {
 portainer_upsert_stack() {
   local stack_name="$1"
   local stack_env_json="$2"
-  shift 2
+  local stack_registries_json="${3:-}"
+  shift 3
   local stack_file
   stack_file="$(mktemp)"
   render_compose "$stack_file" "$@"
 
   local body
-  body="$(jq -Rs --arg name "$stack_name" --argjson env "$stack_env_json" '{Name:$name, StackFileContent:., Env:$env}' < "$stack_file")"
+  body="$(jq -Rs --arg name "$stack_name" --argjson env "$stack_env_json" --arg registries "$stack_registries_json" '
+    {Name:$name, StackFileContent:., Env:$env}
+    + (if $registries != "" then {Registries:$registries} else {} end)
+  ' < "$stack_file")"
   local stack_id
   stack_id="$(portainer_stack_id "$stack_name" || true)"
 
@@ -1168,6 +1228,7 @@ Would:
 - initialize/authenticate Portainer admin
 - create/update Portainer stack: $NPM_STACK_NAME from docker-compose.npm.yml
 - create/update Portainer stack: $APP_STACK_NAME from ${SUPABASE_COMPOSE_FILES[*]}
+- authenticate Portainer to the private Daiana image registry when needed
 - wait for core Supabase to become healthy
 - run init SQL in order: schemas, auth, public, studio, webui, vault, functions
 - create/update Portainer stack: $APP_STACK_NAME from ${APP_COMPOSE_FILES[*]}
@@ -1229,10 +1290,10 @@ else
 fi
 
 log "Deploying NPM stack via Portainer"
-portainer_upsert_stack "$NPM_STACK_NAME" "$NPM_STACK_ENV_JSON" docker-compose.npm.yml
+portainer_upsert_stack "$NPM_STACK_NAME" "$NPM_STACK_ENV_JSON" "" docker-compose.npm.yml
 
 log "Deploying core Supabase stack via Portainer"
-portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "${SUPABASE_COMPOSE_FILES[@]}"
+portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "" "${SUPABASE_COMPOSE_FILES[@]}"
 
 CURRENT_PHASE="waiting for core Supabase"
 wait_for_supabase_ready 240 2 || die "Supabase core did not become ready"
@@ -1244,8 +1305,11 @@ fi
 log "Applying Flowise storage ownership"
 ensure_flowise_storage_permissions
 
+log "Preparing private registry access for Daiana images"
+PORTAINER_DAIA_REGISTRIES_JSON="$(portainer_ensure_private_registry)"
+
 log "Deploying Daiana app stack via Portainer"
-portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "${APP_COMPOSE_FILES[@]}"
+portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "$PORTAINER_DAIA_REGISTRIES_JSON" "${APP_COMPOSE_FILES[@]}"
 
 log "Waiting for NPM API"
 wait_for_http "$NPM_URL/api" "NPM API" 180 2 1 || die "NPM API did not become ready"
