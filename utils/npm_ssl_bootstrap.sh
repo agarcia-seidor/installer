@@ -45,7 +45,6 @@ LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-$NPM_ADMIN_EMAIL}"
 TLS_MODE="${TLS_MODE:-}"
 USE_LOCAL_TLS_CERTS="${USE_LOCAL_TLS_CERTS:-0}"
 ENSURE_PROXY_HOSTS="${ENSURE_PROXY_HOSTS:-1}"
-ENABLE_MSTEAMS="${ENABLE_MSTEAMS:-0}"
 NPM_LOCAL_CERT_NAME="${NPM_LOCAL_CERT_NAME:-daiana-local-tls}"
 NPM_LOCAL_CERT_FILE="${NPM_LOCAL_CERT_FILE:-volumes/api/server.crt}"
 NPM_LOCAL_KEY_FILE="${NPM_LOCAL_KEY_FILE:-volumes/api/server.key}"
@@ -523,9 +522,7 @@ main() {
     "webui:daiana-webui:8080"
   )
 
-  if [[ "$ENABLE_MSTEAMS" == "1" ]] || docker inspect daiana-msteams >/dev/null 2>&1; then
-    SERVICES+=("msteams:daiana-msteams:3978")
-  fi
+  SERVICES+=("msteams:daiana-msteams:3978")
 
   matched=0
   for entry in "${SERVICES[@]}"; do

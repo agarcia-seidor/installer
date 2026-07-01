@@ -119,6 +119,40 @@ load_dotenv() {
 
 load_dotenv .env
 
+persist_env_value() {
+  local key="$1"
+  local value="$2"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="$key" -v value="$value" '
+    BEGIN { done = 0 }
+    $0 ~ "^[[:space:]]*#?[[:space:]]*" key "=" { print key "=" value; done = 1; next }
+    { print }
+    END { if (done == 0) print key "=" value }
+  ' .env > "$tmp"
+  mv "$tmp" .env
+}
+
+refresh_public_urls_in_env() {
+  local public_scheme="https"
+  case "$BASE_DOMAIN" in
+    *.nip.io) public_scheme="http" ;;
+  esac
+
+  persist_env_value STUDIO_BASE_URL "${public_scheme}://studio.${BASE_DOMAIN}"
+  persist_env_value SUPABASE_PUBLIC_URL "${public_scheme}://supa.${BASE_DOMAIN}"
+  persist_env_value API_EXTERNAL_URL "${public_scheme}://supa.${BASE_DOMAIN}/auth/v1"
+  persist_env_value SITE_URL "${public_scheme}://daiana.${BASE_DOMAIN}"
+  persist_env_value WEBUI_BASE_URL "${public_scheme}://webui.${BASE_DOMAIN}"
+  persist_env_value BACKEND_BASE_URL "${public_scheme}://api.${BASE_DOMAIN}"
+  persist_env_value WS_BASE_URL "${public_scheme}://whatsapp.${BASE_DOMAIN}"
+  persist_env_value MS_BASE_URL "${public_scheme}://msteam.${BASE_DOMAIN}"
+  persist_env_value VANNA_BASE_URL "${public_scheme}://vanna.${BASE_DOMAIN}"
+  persist_env_value QDRANT_BASE_URL "${public_scheme}://qdrant.${BASE_DOMAIN}"
+  persist_env_value CORS_ALLOW_ORIGIN "${public_scheme}://daiana.${BASE_DOMAIN}"
+  persist_env_value NEXT_PUBLIC_APP_URL "${public_scheme}://daiana.${BASE_DOMAIN}"
+}
+
 BASE_DOMAIN="${BASE_DOMAIN:-}"
 NPM_ADMIN_EMAIL="${NPM_ADMIN_EMAIL:-}"
 NPM_ADMIN_PASS="${NPM_ADMIN_PASS:-}"
@@ -165,6 +199,8 @@ Would:
 - use BASE_DOMAIN=$BASE_DOMAIN
 - use certificate mode: $TLS_MODE
 - apply certificates to existing NPM proxy hosts only
+- refresh persisted public URLs in .env for non-nip.io domains
+- refresh Portainer stacks after the env update
 EOF
   exit 0
 fi
@@ -191,3 +227,10 @@ BASE_DOMAIN="$BASE_DOMAIN" NPM_ADMIN_EMAIL="$NPM_ADMIN_EMAIL" NPM_ADMIN_PASS="$N
 TLS_MODE="$TLS_MODE" ENSURE_PROXY_HOSTS=0 ONLY_PREFIX="${ONLY_PREFIX:-}" NPM_LOCAL_CERT_FILE="$NPM_LOCAL_CERT_FILE" NPM_LOCAL_KEY_FILE="$NPM_LOCAL_KEY_FILE" \
 NPM_CUSTOM_CERT_NAME="$NPM_CUSTOM_CERT_NAME" NPM_CUSTOM_CERT_FILE="$NPM_CUSTOM_CERT_FILE" NPM_CUSTOM_KEY_FILE="$NPM_CUSTOM_KEY_FILE" \
   bash utils/npm_ssl_bootstrap.sh
+
+if [[ "$BASE_DOMAIN" != *.nip.io ]]; then
+  log "Refreshing persisted public URLs in .env to https"
+  refresh_public_urls_in_env
+  log "Refreshing Portainer stacks after certificate update"
+  bash update-daiana.sh --update
+fi

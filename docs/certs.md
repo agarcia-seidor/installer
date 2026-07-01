@@ -13,6 +13,8 @@ bash apply-certs.sh
 - only applies certificates
 - does not create proxy hosts
 - updates existing NPM hosts for `port.$BASE_DOMAIN` and `nginx.$BASE_DOMAIN`
+- refreshes persisted public URLs in `.env` to `https` for non-`nip.io` domains (keeps `nip.io` on `http`)
+- refreshes Portainer stacks after the env update for non-`nip.io` domains
 - auto-generates local/self-signed cert files when `TLS_MODE=local` and the files are missing
 - supports `ONLY_PREFIX` to target a single proxy prefix (for example `port`, `nginx`, `supa`)
 
