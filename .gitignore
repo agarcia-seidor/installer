@@ -15,3 +15,4 @@ volumes/portainer/
 volumes/api/*.crt
 volumes/api/*.key
 volumes/snippets/*.sql
+context.md
