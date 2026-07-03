@@ -425,7 +425,7 @@ load_dotenv() {
           continue
         fi
         printf -v "$key" '%s' "$value"
-        declare -gx "$key"
+        export "${key?}"
         ;;
     esac
   done < "$file"
@@ -552,7 +552,7 @@ prompt_missing() {
     fi
   fi
   printf -v "$var" '%s' "$value"
-  declare -gx "$var"
+      export "${var?}"
 }
 
 PORTAINER_PASSWORD_MIN=12
@@ -596,7 +596,7 @@ prompt_optional() {
     value="$default_value"
   fi
   printf -v "$var" '%s' "$value"
-  declare -gx "$var"
+      export "${var?}"
   if [ "$DRY_RUN" != "1" ] && [ -n "$value" ]; then
     persist_env_value "$var" "$value"
   fi
@@ -619,7 +619,7 @@ prompt_required() {
     fi
   done
   printf -v "$var" '%s' "$value"
-  declare -gx "$var"
+      export "${var?}"
   if [ "$DRY_RUN" != "1" ]; then
     persist_env_value "$var" "$value"
   fi
@@ -638,7 +638,7 @@ seed_daiana_env() {
     local value="$2"
     if [ -z "${!var:-}" ]; then
       printf -v "$var" '%s' "$value"
-      declare -gx "$var"
+      export "${var?}"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -653,7 +653,7 @@ seed_daiana_env() {
       local value
       value="$(generate_secret "$length")"
       printf -v "$var" '%s' "$value"
-      declare -gx "$var"
+      export "${var?}"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -666,7 +666,7 @@ seed_daiana_env() {
     local value="$2"
     if [ -z "${!var:-}" ]; then
       printf -v "$var" '%s' "$value"
-      declare -gx "$var"
+      export "${var?}"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -1290,6 +1290,69 @@ postgres_connection_uri() {
   printf 'postgresql://postgres.%s:%s@%s:%s/%s' "$POOLER_TENANT_ID" "$POSTGRES_PASSWORD" "$host" "$POSTGRES_PORT" "$POSTGRES_DB"
 }
 
+psql_scalar() {
+  local db_user="$1"
+  local query="$2"
+  local output
+  if ! output="$(docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -Atqc "$query" 2>&1)"; then
+    printf '__PSQL_ERROR__:%s' "$output"
+    return 0
+  fi
+  printf '%s' "$output"
+}
+
+wait_for_supabase_auth_migrations() {
+  local max_tries="${1:-120}"
+  local delay="${2:-2}"
+  local i=1
+  local expected_auth_migration_version="20260302000000"
+  local required_tables="('auth.schema_migrations'), ('auth.users'), ('auth.identities'), ('auth.sessions'), ('auth.refresh_tokens'), ('auth.audit_log_entries'), ('auth.instances')"
+
+  command -v docker >/dev/null 2>&1 || die "docker is required to verify Supabase Auth migrations"
+
+  while [ "$i" -le "$max_tries" ]; do
+    local missing migration_count latest_migration_ready
+    missing="$(psql_scalar supabase_auth_admin "WITH required(name) AS (VALUES $required_tables) SELECT COALESCE(string_agg(name, ', '), '') FROM required WHERE to_regclass(name) IS NULL;")"
+
+    if [[ "$missing" != __PSQL_ERROR__:* ]] && [ -z "$missing" ]; then
+      latest_migration_ready="$(psql_scalar supabase_auth_admin "SELECT EXISTS (SELECT 1 FROM auth.schema_migrations WHERE version = '$expected_auth_migration_version');")"
+      migration_count="$(psql_scalar supabase_auth_admin "SELECT count(*) FROM auth.schema_migrations;")"
+
+      if [ "$latest_migration_ready" = "t" ]; then
+        log "Supabase Auth migrations are ready ($migration_count migrations recorded; latest=$expected_auth_migration_version)"
+        return 0
+      fi
+    fi
+
+    if [ "$i" -eq 1 ] || [ $((i % 10)) -eq 0 ]; then
+      log "Waiting for Supabase Auth migrations... ($i/$max_tries)"
+      if [[ "${missing:-}" == __PSQL_ERROR__:* ]]; then
+        log "Auth object readiness query failed: ${missing#__PSQL_ERROR__:}"
+      elif [ -n "${missing:-}" ]; then
+        log "Missing Auth objects: $missing"
+      elif [[ "${latest_migration_ready:-}" == __PSQL_ERROR__:* ]]; then
+        log "Auth latest-migration query failed: ${latest_migration_ready#__PSQL_ERROR__:}"
+      elif [[ "${migration_count:-}" == __PSQL_ERROR__:* ]]; then
+        log "Auth migration count query failed: ${migration_count#__PSQL_ERROR__:}"
+      elif [ -n "${migration_count:-}" ]; then
+        log "Auth migration rows observed: $migration_count; waiting for migration $expected_auth_migration_version"
+      else
+        log "Auth migration history is not readable yet"
+      fi
+    fi
+
+    sleep "$delay"
+    i=$((i + 1))
+  done
+
+  return 1
+}
+
+schema_tables_for_truncate_query() {
+  local schema="$1"
+  printf "SELECT string_agg(format('%%I.%%I', schemaname, tablename), ', ') FROM pg_tables WHERE schemaname = '%s' AND tablename <> 'schema_migrations';" "$schema"
+}
+
 run_psql_file() {
   local schema="$1"
   local db_user="$2"
@@ -1307,12 +1370,16 @@ run_psql_file() {
   done
 
   if [ "$schema" != "-" ] && [ -n "$schema" ]; then
-    tables="$(docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -Atqc "SELECT string_agg(format('%I.%I', schemaname, tablename), ', ') FROM pg_tables WHERE schemaname = '$schema';")"
+    tables="$(docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -Atqc "$(schema_tables_for_truncate_query "$schema")")"
     if [ -n "$tables" ]; then
       docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "TRUNCATE $tables RESTART IDENTITY CASCADE"
     fi
   fi
-  docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" "${psql_vars[@]}" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
+  if [ "${#psql_vars[@]}" -gt 0 ]; then
+    docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" "${psql_vars[@]}" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
+  else
+    docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
+  fi
 }
 
 run_supabase_init_sql() {
@@ -1324,6 +1391,7 @@ run_supabase_init_sql() {
   fi
 
   uri="$(postgres_connection_uri)"
+  wait_for_supabase_auth_migrations 120 2 || die "Supabase Auth migrations did not finish before data seed SQL"
   local sql_files=(
     "auth:supabase_admin:volumes/db/init/auth.sql"
     "public:supabase_admin:volumes/db/init/public.sql"
@@ -1377,6 +1445,7 @@ Would:
 - create/update Portainer stack: $APP_STACK_NAME from ${SUPABASE_COMPOSE_FILES[*]}
 - authenticate Portainer to the private Daiana image registry when needed
 - wait for core Supabase to become healthy
+- wait for Supabase Auth migrations to finish
 - run init SQL in order: schemas, auth, public, studio, webui, vault, functions
 - create/update Portainer stack: $APP_STACK_NAME from ${APP_COMPOSE_FILES[*]}
 - wait for NPM at $NPM_URL/api
@@ -1407,13 +1476,13 @@ report_daiana_versions() {
     [ -n "$current" ] || current="missing"
     log "$service: current=$current target=$target"
   done <<'EOF'
-daiana-next|daiana-next|cloudseidoranalytics/daiana:v2.1.5
+daiana-next|daiana-next|cloudseidoranalytics/daiana:v2.1.7
 daiana-python|daiana-python|cloudseidoranalytics/daianapython:v2.1.5
 daiana-vanna|daiana-vanna|cloudseidoranalytics/daianavanna:v1.30.4
 daiana-msteams|daiana-msteams|cloudseidoranalytics/daianamsteams:v2.1.5
 daiana-whatsapp|daiana-whatsapp|cloudseidoranalytics/daianawhatsapp:v1.0.2
 daiana-studio|daiana-studio|cloudseidoranalytics/daianastudio:v3.1.2
-daiana-webui|daiana-webui|cloudseidoranalytics/daianawebui:dev
+daiana-webui|daiana-webui|cloudseidoranalytics/daianawebui:v2.1.7
 EOF
 }
 
