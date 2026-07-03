@@ -12,8 +12,8 @@ EOF
 chmod +x "$TMP_DIR/docker"
 PATH="$TMP_DIR:$PATH"
 
-POSTGRES_PASSWORD="test-password"
-POSTGRES_DB="postgres"
+export POSTGRES_PASSWORD="test-password"
+export POSTGRES_DB="postgres"
 LOG_OUTPUT=""
 MOCK_SCENARIO="ready"
 

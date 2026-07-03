@@ -425,7 +425,7 @@ load_dotenv() {
           continue
         fi
         printf -v "$key" '%s' "$value"
-            export "$key"
+        export "${key?}"
         ;;
     esac
   done < "$file"
@@ -552,7 +552,7 @@ prompt_missing() {
     fi
   fi
   printf -v "$var" '%s' "$value"
-      export "$var"
+      export "${var?}"
 }
 
 PORTAINER_PASSWORD_MIN=12
@@ -596,7 +596,7 @@ prompt_optional() {
     value="$default_value"
   fi
   printf -v "$var" '%s' "$value"
-      export "$var"
+      export "${var?}"
   if [ "$DRY_RUN" != "1" ] && [ -n "$value" ]; then
     persist_env_value "$var" "$value"
   fi
@@ -619,7 +619,7 @@ prompt_required() {
     fi
   done
   printf -v "$var" '%s' "$value"
-      export "$var"
+      export "${var?}"
   if [ "$DRY_RUN" != "1" ]; then
     persist_env_value "$var" "$value"
   fi
@@ -638,7 +638,7 @@ seed_daiana_env() {
     local value="$2"
     if [ -z "${!var:-}" ]; then
       printf -v "$var" '%s' "$value"
-      export "$var"
+      export "${var?}"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -653,7 +653,7 @@ seed_daiana_env() {
       local value
       value="$(generate_secret "$length")"
       printf -v "$var" '%s' "$value"
-      export "$var"
+      export "${var?}"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -666,7 +666,7 @@ seed_daiana_env() {
     local value="$2"
     if [ -z "${!var:-}" ]; then
       printf -v "$var" '%s' "$value"
-      export "$var"
+      export "${var?}"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
