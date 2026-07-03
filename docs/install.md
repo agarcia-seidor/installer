@@ -1,5 +1,7 @@
 # Install
 
+For the full server setup, prerequisites, TLS flow, and troubleshooting guide, see [Daiana Installer Step-by-Step Guide](installation-step-by-step.md).
+
 ```bash
 bash install-daiana.sh
 ```
