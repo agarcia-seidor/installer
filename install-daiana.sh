@@ -1476,13 +1476,13 @@ report_daiana_versions() {
     [ -n "$current" ] || current="missing"
     log "$service: current=$current target=$target"
   done <<'EOF'
-daiana-next|daiana-next|cloudseidoranalytics/daiana:v2.1.5
+daiana-next|daiana-next|cloudseidoranalytics/daiana:v2.1.7
 daiana-python|daiana-python|cloudseidoranalytics/daianapython:v2.1.5
 daiana-vanna|daiana-vanna|cloudseidoranalytics/daianavanna:v1.30.4
 daiana-msteams|daiana-msteams|cloudseidoranalytics/daianamsteams:v2.1.5
 daiana-whatsapp|daiana-whatsapp|cloudseidoranalytics/daianawhatsapp:v1.0.2
 daiana-studio|daiana-studio|cloudseidoranalytics/daianastudio:v3.1.2
-daiana-webui|daiana-webui|cloudseidoranalytics/daianawebui:dev
+daiana-webui|daiana-webui|cloudseidoranalytics/daianawebui:v2.1.7
 EOF
 }
 

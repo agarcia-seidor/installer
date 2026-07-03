@@ -1,6 +1,6 @@
 services:
   daiananext:
-    image: cloudseidoranalytics/daiana:v2.1.5
+    image: cloudseidoranalytics/daiana:v2.1.7
     container_name: daiana-next
     restart: unless-stopped
     volumes:
@@ -180,7 +180,7 @@ services:
           - node.role == manager
 
   daianawebui:
-    image: cloudseidoranalytics/daianawebui:dev
+    image: cloudseidoranalytics/daianawebui:v2.1.7
     container_name: daiana-webui
     volumes:
       - ./volumes/daiana/webui/data:/app/backend/data
