@@ -1109,38 +1109,101 @@ ensure_network() {
   fi
 }
 
+ensure_app_storage_directories() {
+  local root="./volumes/daiana"
+  local dirs=(
+    "$root/static"
+    "$root/qdrant/storage"
+    "$root/whatsapp/log"
+    "$root/flowise"
+    "$root/flowise/logs"
+    "$root/webui/data"
+  )
+  local dir os_name owner
+
+  os_name="$(uname -s 2>/dev/null || true)"
+  owner="$(id -u):$(id -g)"
+
+  if ! mkdir -p "$root" 2>/dev/null; then
+    case "$os_name" in
+      Darwin*)
+        if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+          sudo mkdir -p "$root" || die "Could not create $root"
+          sudo chown -R "$owner" "$root" || die "Could not set ownership on $root"
+        else
+          die "Could not create $root"
+        fi
+        ;;
+      *)
+        if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+          sudo mkdir -p "$root" || die "Could not create $root"
+        else
+          die "Could not create $root"
+        fi
+        ;;
+    esac
+  fi
+
+  for dir in "${dirs[@]}"; do
+    if mkdir -p "$dir" 2>/dev/null; then
+      continue
+    fi
+    if [ "$os_name" = "Darwin" ] && command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+      sudo chown -R "$owner" "$root" 2>/dev/null || true
+      if mkdir -p "$dir" 2>/dev/null; then
+        continue
+      fi
+      sudo mkdir -p "$dir" || die "Could not create $dir"
+      sudo chown -R "$owner" "$root" || die "Could not set ownership on $root"
+      continue
+    fi
+    if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
+      sudo mkdir -p "$dir" || die "Could not create $dir"
+      continue
+    fi
+    die "Could not create $dir"
+  done
+}
+
 ensure_flowise_storage_permissions() {
   local flowise_root="./volumes/daiana"
   local flowise_dir="$flowise_root/flowise"
-  if mkdir -p "$flowise_dir" 2>/dev/null; then
+  local flowise_logs_dir="$flowise_dir/logs"
+  local desired_owner="1000:1000"
+
+  case "$(uname -s 2>/dev/null || true)" in
+    Darwin*) desired_owner="$(id -u):$(id -g)" ;;
+  esac
+
+  if mkdir -p "$flowise_logs_dir" 2>/dev/null; then
     :
   else
-    log "Cannot create $flowise_dir"
+    log "Cannot create $flowise_logs_dir"
     if [ "$ACTION" = "install" ]; then
-      if prompt_yes_no "Fix Flowise permissions with sudo chown -R 1000:1000 $flowise_root now?" "y"; then
+      if prompt_yes_no "Fix Flowise permissions with sudo chown -R $desired_owner $flowise_root now?" "y"; then
         if command -v sudo >/dev/null 2>&1 && [ "$(id -u)" -ne 0 ]; then
-          sudo chown -R 1000:1000 "$flowise_root"
+          sudo chown -R "$desired_owner" "$flowise_root"
         else
-          chown -R 1000:1000 "$flowise_root"
+          chown -R "$desired_owner" "$flowise_root"
         fi
-        mkdir -p "$flowise_dir" || die "Could not create $flowise_dir even after fixing permissions"
+        mkdir -p "$flowise_logs_dir" || die "Could not create $flowise_logs_dir even after fixing permissions"
       else
-        die "Cannot continue until $flowise_dir is writable"
+        die "Cannot continue until $flowise_logs_dir is writable"
       fi
     else
       if [ "$(id -u)" -eq 0 ]; then
-        chown -R 1000:1000 "$flowise_root"
+        chown -R "$desired_owner" "$flowise_root"
       elif command -v sudo >/dev/null 2>&1; then
-        sudo chown -R 1000:1000 "$flowise_root"
+        sudo chown -R "$desired_owner" "$flowise_root"
       fi
-      mkdir -p "$flowise_dir" || die "Could not create $flowise_dir; fix permissions and retry"
+      mkdir -p "$flowise_logs_dir" || die "Could not create $flowise_logs_dir; fix permissions and retry"
     fi
   fi
   if [ "$ACTION" = "install" ]; then
     if [ "$(id -u)" -eq 0 ]; then
-      chown -R 1000:1000 "$flowise_root"
+      chown -R "$desired_owner" "$flowise_root"
     elif command -v sudo >/dev/null 2>&1; then
-      sudo chown -R 1000:1000 "$flowise_root"
+      sudo chown -R "$desired_owner" "$flowise_root"
     else
       log "Skipping ownership change for $flowise_root (no sudo available)"
     fi
@@ -1385,6 +1448,9 @@ wait_for_supabase_ready 240 2 || die "Supabase core did not become ready"
 if [ "$ACTION" = "install" ]; then
   run_supabase_init_sql
 fi
+
+log "Preparing app storage directories"
+ensure_app_storage_directories
 
 log "Applying Flowise storage ownership"
 ensure_flowise_storage_permissions
