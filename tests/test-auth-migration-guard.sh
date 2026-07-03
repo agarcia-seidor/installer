@@ -110,3 +110,7 @@ MOCK_SCENARIO="latest_error"
 LOG_OUTPUT=""
 assert_failure "auth guard reports latest migration query errors" wait_for_supabase_auth_migrations 1 0
 [[ "$LOG_OUTPUT" == *"Auth latest-migration query failed: permission denied"* ]]
+
+truncate_query="$(schema_tables_for_truncate_query auth)"
+[[ "$truncate_query" == *"tablename <> 'schema_migrations'"* ]]
+printf 'PASS: auth schema_migrations is excluded from seed truncation\n'

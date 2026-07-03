@@ -1348,6 +1348,11 @@ wait_for_supabase_auth_migrations() {
   return 1
 }
 
+schema_tables_for_truncate_query() {
+  local schema="$1"
+  printf "SELECT string_agg(format('%%I.%%I', schemaname, tablename), ', ') FROM pg_tables WHERE schemaname = '%s' AND tablename <> 'schema_migrations';" "$schema"
+}
+
 run_psql_file() {
   local schema="$1"
   local db_user="$2"
@@ -1365,16 +1370,16 @@ run_psql_file() {
   done
 
   if [ "$schema" != "-" ] && [ -n "$schema" ]; then
-    tables="$(docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -Atqc "SELECT string_agg(format('%I.%I', schemaname, tablename), ', ') FROM pg_tables WHERE schemaname = '$schema';")"
+    tables="$(docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -Atqc "$(schema_tables_for_truncate_query "$schema")")"
     if [ -n "$tables" ]; then
       docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -c "TRUNCATE $tables RESTART IDENTITY CASCADE"
     fi
   fi
-      if [ "${#psql_vars[@]}" -gt 0 ]; then
-        docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" "${psql_vars[@]}" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
-      else
-        docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
-      fi
+  if [ "${#psql_vars[@]}" -gt 0 ]; then
+    docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" "${psql_vars[@]}" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
+  else
+    docker_cmd exec -i -e PGPASSWORD="$POSTGRES_PASSWORD" supabase-db psql -h 127.0.0.1 -U "$db_user" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -f /dev/stdin < "$file"
+  fi
 }
 
 run_supabase_init_sql() {
