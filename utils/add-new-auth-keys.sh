@@ -162,8 +162,6 @@ console.log("JWT_JWKS=" + JSON.stringify(jwksPublic));
 # Read generated values
 SUPABASE_PUBLISHABLE_KEY=$(grep '^SUPABASE_PUBLISHABLE_KEY=' "$tmpdir/output" | cut -d= -f2-)
 SUPABASE_SECRET_KEY=$(grep '^SUPABASE_SECRET_KEY=' "$tmpdir/output" | cut -d= -f2-)
-ANON_KEY_ASYMMETRIC=$(grep '^ANON_KEY_ASYMMETRIC=' "$tmpdir/output" | cut -d= -f2-)
-SERVICE_ROLE_KEY_ASYMMETRIC=$(grep '^SERVICE_ROLE_KEY_ASYMMETRIC=' "$tmpdir/output" | cut -d= -f2-)
 JWT_KEYS=$(grep '^JWT_KEYS=' "$tmpdir/output" | cut -d= -f2-)
 JWT_JWKS=$(grep '^JWT_JWKS=' "$tmpdir/output" | cut -d= -f2-)
 
@@ -204,7 +202,7 @@ echo "Updating .env..."
 
 # Append new variables if they don't exist, or update them if they do
 for var in SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY ANON_KEY_ASYMMETRIC SERVICE_ROLE_KEY_ASYMMETRIC JWT_KEYS JWT_JWKS; do
-    eval "val=\$$var"
+    val=$(grep "^${var}=" "$tmpdir/output" | cut -d= -f2-)
     if grep -q "^${var}=" .env; then
         sed -i.old -e "s|^${var}=.*$|${var}=${val}|" .env
     else

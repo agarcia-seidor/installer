@@ -82,7 +82,6 @@ npm_request() {
   local method="$1"
   local path="$2"
   local data="${3:-}"
-  local extra=()
   local response status body
   response="$(curl -sS -X "$method" "$NPM_API_URL$path" \
     ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
@@ -214,9 +213,9 @@ configure_local_tls_for_prefix() {
   cert_stem="${cert_stem%.*}"
   key_stem="${key_stem%.*}"
   if [[ "$cert_stem" != *-"$suffix" || "$key_stem" != *-"$suffix" ]]; then
-    set -- $(local_cert_paths_for_prefix "$prefix")
-    NPM_LOCAL_CERT_FILE="$1"
-    NPM_LOCAL_KEY_FILE="$2"
+    mapfile -t cert_paths < <(local_cert_paths_for_prefix "$prefix")
+    NPM_LOCAL_CERT_FILE="${cert_paths[0]}"
+    NPM_LOCAL_KEY_FILE="${cert_paths[1]}"
   fi
   base_name="${NPM_LOCAL_CERT_NAME:-daiana-local-tls}"
   case "$base_name" in
@@ -530,9 +529,9 @@ main() {
     up_host_var="HOST_${upper_prefix}"
     up_port_var="PORT_${upper_prefix}"
     domain_var="DOMAIN_${upper_prefix}"
-    eval "up_host=\"\${${up_host_var}:-$default_host}\""
-    eval "up_port=\"\${${up_port_var}:-$default_port}\""
-    eval "custom_domain=\"\${${domain_var}:-}\""
+    up_host="${!up_host_var:-$default_host}"
+    up_port="${!up_port_var:-$default_port}"
+    custom_domain="${!domain_var:-}"
 
     if [[ -n "$custom_domain" ]]; then
       domain="$custom_domain"

@@ -2,7 +2,11 @@
 set -eEuo pipefail
 
 CURRENT_PHASE="starting"
-trap 'code=$?; printf "ERROR: installer failed during %s (exit %s)\n" "$CURRENT_PHASE" "$code" >&2' ERR
+error_trap() {
+  local code=$?
+  printf "ERROR: installer failed during %s (exit %s)\n" "$CURRENT_PHASE" "$code" >&2
+}
+trap error_trap ERR
 
 if [ -z "${BASH_VERSION:-}" ]; then
   printf 'ERROR: run this installer with bash, not sh. Use: bash ./install-daiana.sh [--dry-run]\n' >&2
@@ -44,7 +48,7 @@ prompt_yes_no() {
   fi
   reply="${reply:-$default_answer}"
   case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
-    y*|s*|si|sí) return 0 ;;
+    y*|s*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -79,15 +83,14 @@ ensure_supabase_cli_on_path() {
   fi
 
   target_user="${SUDO_USER:-${USER:-}}"
-  for candidate in "$HOME/.supabase/bin"; do
-    if [ -x "$candidate/supabase" ]; then
-      case ":$PATH:" in
-        *":$candidate:"*) ;;
-        *) PATH="$candidate:$PATH"; export PATH ;;
-      esac
-      return 0
-    fi
-  done
+  candidate="$HOME/.supabase/bin"
+  if [ -x "$candidate/supabase" ]; then
+    case ":$PATH:" in
+      *":$candidate:"*) ;;
+      *) PATH="$candidate:$PATH"; export PATH ;;
+    esac
+    return 0
+  fi
 
   if [ -n "$target_user" ] && [ "$target_user" != "$(id -un)" ] && command -v getent >/dev/null 2>&1; then
     home="$(getent passwd "$target_user" | awk -F: '{print $6}')"
@@ -422,7 +425,7 @@ load_dotenv() {
           continue
         fi
         printf -v "$key" '%s' "$value"
-        export "$key"
+        declare -gx "$key"
         ;;
     esac
   done < "$file"
@@ -515,13 +518,15 @@ prompt() {
 
 prompt_secret() {
   local label="$1"
-  local reply=""
+  local reply="" stty_state=""
   if [ -t 0 ] && [ -r /dev/tty ]; then
     printf '%s: ' "$label" >&2
     stty_state="$(stty -g </dev/tty 2>/dev/null || true)"
     stty -echo </dev/tty 2>/dev/null || true
     read -r reply </dev/tty
-    [ -n "$stty_state" ] && stty "$stty_state" </dev/tty 2>/dev/null || true
+    if [ -n "$stty_state" ]; then
+      stty "$stty_state" </dev/tty 2>/dev/null || true
+    fi
     printf '\n' >&2
   fi
   printf '%s' "$reply"
@@ -547,7 +552,7 @@ prompt_missing() {
     fi
   fi
   printf -v "$var" '%s' "$value"
-  export "$var"
+  declare -gx "$var"
 }
 
 PORTAINER_PASSWORD_MIN=12
@@ -558,8 +563,8 @@ generate_password() {
   local body_len=$((length - 4))
   [ "$body_len" -lt 8 ] && body_len=8
   local upper lower digit special body
-  upper="$( (set +o pipefail; LC_ALL=C tr -dc 'A-Z' </dev/urandom | head -c 1) )"
-  lower="$( (set +o pipefail; LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 1) )"
+  upper="$( (set +o pipefail; LC_ALL=C tr -dc '[:upper:]' </dev/urandom | head -c 1) )"
+  lower="$( (set +o pipefail; LC_ALL=C tr -dc '[:lower:]' </dev/urandom | head -c 1) )"
   digit="$( (set +o pipefail; LC_ALL=C tr -dc '0-9' </dev/urandom | head -c 1) )"
   special="$( (set +o pipefail; LC_ALL=C tr -dc '!@#$%^&*_=+?-' </dev/urandom | head -c 1) )"
   body="$( (set +o pipefail; LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$body_len") )"
@@ -591,7 +596,7 @@ prompt_optional() {
     value="$default_value"
   fi
   printf -v "$var" '%s' "$value"
-  export "$var"
+  declare -gx "$var"
   if [ "$DRY_RUN" != "1" ] && [ -n "$value" ]; then
     persist_env_value "$var" "$value"
   fi
@@ -614,7 +619,7 @@ prompt_required() {
     fi
   done
   printf -v "$var" '%s' "$value"
-  export "$var"
+  declare -gx "$var"
   if [ "$DRY_RUN" != "1" ]; then
     persist_env_value "$var" "$value"
   fi
@@ -633,7 +638,7 @@ seed_daiana_env() {
     local value="$2"
     if [ -z "${!var:-}" ]; then
       printf -v "$var" '%s' "$value"
-      export "$var"
+      declare -gx "$var"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -648,7 +653,7 @@ seed_daiana_env() {
       local value
       value="$(generate_secret "$length")"
       printf -v "$var" '%s' "$value"
-      export "$var"
+      declare -gx "$var"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -661,7 +666,7 @@ seed_daiana_env() {
     local value="$2"
     if [ -z "${!var:-}" ]; then
       printf -v "$var" '%s' "$value"
-      export "$var"
+      declare -gx "$var"
       if [ "$DRY_RUN" != "1" ]; then
         persist_env_value "$var" "$value"
       fi
@@ -1053,7 +1058,9 @@ portainer_ensure_endpoint() {
     --form 'Name=local-docker' \
     --form 'URL=unix:///var/run/docker.sock' \
     --form 'EndpointCreationType=1' | jq -r '.Id')"
-  [ -n "$endpoint_id" ] && [ "$endpoint_id" != "null" ] || die "Could not create Portainer endpoint"
+  if [ -z "$endpoint_id" ] || [ "$endpoint_id" = "null" ]; then
+    die "Could not create Portainer endpoint"
+  fi
   printf '%s' "$endpoint_id"
 }
 

@@ -111,7 +111,7 @@ load_dotenv() {
           value="${value:1:${#value}-2}"
         fi
         printf -v "$key" '%s' "$value"
-        export "$key"
+        declare -gx "$key"
         ;;
     esac
   done < "$file"
@@ -207,9 +207,9 @@ fi
 
 if [ "$TLS_MODE" = "local" ]; then
   if [ -n "${ONLY_PREFIX:-}" ]; then
-    set -- $(local_cert_paths_for_prefix "$ONLY_PREFIX")
-    NPM_LOCAL_CERT_FILE="$1"
-    NPM_LOCAL_KEY_FILE="$2"
+    mapfile -t cert_paths < <(local_cert_paths_for_prefix "$ONLY_PREFIX")
+    NPM_LOCAL_CERT_FILE="${cert_paths[0]}"
+    NPM_LOCAL_KEY_FILE="${cert_paths[1]}"
     ensure_local_certificate_files "$(resolve_domain_for_prefix "$ONLY_PREFIX")"
   else
     ensure_local_certificate_files "$BASE_DOMAIN"
