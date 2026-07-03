@@ -36,6 +36,7 @@ ensure_command() {
 
 ensure_command curl curl jq
 ensure_command jq curl jq
+ensure_command openssl openssl
 
 NPM_API_URL="${NPM_API_URL:-http://127.0.0.1:81}"
 NPM_ADMIN_EMAIL="${NPM_ADMIN_EMAIL:?Falta NPM_ADMIN_EMAIL}"
@@ -50,6 +51,7 @@ NPM_LOCAL_KEY_FILE="${NPM_LOCAL_KEY_FILE:-volumes/api/server.key}"
 NPM_CUSTOM_CERT_NAME="${NPM_CUSTOM_CERT_NAME:-daiana-custom-tls}"
 NPM_CUSTOM_CERT_FILE="${NPM_CUSTOM_CERT_FILE:-}"
 NPM_CUSTOM_KEY_FILE="${NPM_CUSTOM_KEY_FILE:-}"
+ONLY_PREFIX="${ONLY_PREFIX:-}"
 
 # Dominio base para generarlos dinámicamente (ej: dnains.duckdns.org)
 BASE_DOMAIN="${BASE_DOMAIN:-}"
@@ -80,7 +82,6 @@ npm_request() {
   local method="$1"
   local path="$2"
   local data="${3:-}"
-  local extra=()
   local response status body
   response="$(curl -sS -X "$method" "$NPM_API_URL$path" \
     ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
@@ -136,17 +137,11 @@ create_letsencrypt_certificate() {
   # NPM crea 1 cert por set de dominios; aquí hacemos 1 dominio por cert (simple)
   local payload
   payload="$(jq -n \
-    --arg email "$LETSENCRYPT_EMAIL" \
     --arg d "$domain" \
     '{
       provider: "letsencrypt",
       nice_name: $d,
-      domain_names: [$d],
-      meta: {
-        letsencrypt_email: $email,
-        letsencrypt_agree: true,
-        dns_challenge: false
-      }
+      domain_names: [$d]
     }')"
 
   echo "Creando certificado Let's Encrypt para: $domain" >&2
@@ -171,6 +166,81 @@ create_custom_certificate_record() {
   payload="$(jq -n --arg n "$name" '{provider:"other", nice_name:$n}')"
   echo "Creando certificado custom en NPM: $name" >&2
   api_post "/api/nginx/certificates" "$payload" | jq -r '.id'
+}
+
+resolve_domain_for_prefix() {
+  local prefix="$1"
+  if [[ "$BASE_DOMAIN" == "${prefix}."* ]]; then
+    printf '%s' "$BASE_DOMAIN"
+  else
+    printf '%s.%s' "$prefix" "$BASE_DOMAIN"
+  fi
+}
+
+sanitize_tls_suffix() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9._-' '-'
+}
+
+local_cert_paths_for_prefix() {
+  local prefix="$1"
+  local cert_path key_path cert_dir key_dir cert_base key_base cert_ext key_ext suffix
+  suffix="$(sanitize_tls_suffix "$prefix")"
+  cert_path="${NPM_LOCAL_CERT_FILE/#~/$HOME}"
+  key_path="${NPM_LOCAL_KEY_FILE/#~/$HOME}"
+  cert_dir="$(dirname "$cert_path")"
+  key_dir="$(dirname "$key_path")"
+  cert_base="$(basename "$cert_path")"
+  key_base="$(basename "$key_path")"
+  cert_ext=""
+  key_ext=""
+  case "$cert_base" in
+    *.*) cert_ext=".${cert_base##*.}"; cert_base="${cert_base%.*}" ;;
+  esac
+  case "$key_base" in
+    *.*) key_ext=".${key_base##*.}"; key_base="${key_base%.*}" ;;
+  esac
+  printf '%s\n%s\n' "${cert_dir}/${cert_base}-${suffix}${cert_ext}" "${key_dir}/${key_base}-${suffix}${key_ext}"
+}
+
+configure_local_tls_for_prefix() {
+  local prefix="$1"
+  local suffix base_name cert_path key_path cert_stem key_stem
+  suffix="$(sanitize_tls_suffix "$prefix")"
+  cert_path="${NPM_LOCAL_CERT_FILE/#~/$HOME}"
+  key_path="${NPM_LOCAL_KEY_FILE/#~/$HOME}"
+  cert_stem="$(basename "$cert_path")"
+  key_stem="$(basename "$key_path")"
+  cert_stem="${cert_stem%.*}"
+  key_stem="${key_stem%.*}"
+  if [[ "$cert_stem" != *-"$suffix" || "$key_stem" != *-"$suffix" ]]; then
+    mapfile -t cert_paths < <(local_cert_paths_for_prefix "$prefix")
+    NPM_LOCAL_CERT_FILE="${cert_paths[0]}"
+    NPM_LOCAL_KEY_FILE="${cert_paths[1]}"
+  fi
+  base_name="${NPM_LOCAL_CERT_NAME:-daiana-local-tls}"
+  case "$base_name" in
+    *-"$suffix") NPM_LOCAL_CERT_NAME="$base_name" ;;
+    *) NPM_LOCAL_CERT_NAME="${base_name}-$suffix" ;;
+  esac
+}
+
+ensure_local_certificate_files() {
+  local domain="$1"
+  local cert_path="${NPM_LOCAL_CERT_FILE/#~/$HOME}"
+  local key_path="${NPM_LOCAL_KEY_FILE/#~/$HOME}"
+
+  if [[ -f "$cert_path" && -f "$key_path" ]]; then
+    return 0
+  fi
+
+  echo "Generando certificado local auto-firmado para $domain" >&2
+  mkdir -p "$(dirname "$cert_path")"
+  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout "$key_path" \
+    -out "$cert_path" \
+    -subj "/CN=$domain" >/dev/null 2>&1
+  chmod 640 "$key_path"
+  chgrp 65533 "$key_path" 2>/dev/null || true
 }
 
 upload_custom_certificate() {
@@ -219,7 +289,7 @@ ensure_certificate() {
     return 0
   fi
 
-  cert_id="$(create_letsencrypt_certificate "$domain" 2>/dev/null || true)"
+  cert_id="$(create_letsencrypt_certificate "$domain" || true)"
   if [[ -n "$cert_id" && "$cert_id" != "null" ]]; then
     echo "Cert Let's Encrypt creado para $domain (id=$cert_id)" >&2
     echo "$cert_id"
@@ -408,6 +478,12 @@ main() {
     none)
       ;;
     local)
+      if [[ -n "$ONLY_PREFIX" ]]; then
+        configure_local_tls_for_prefix "$ONLY_PREFIX"
+        ensure_local_certificate_files "$(resolve_domain_for_prefix "$ONLY_PREFIX")"
+      else
+        ensure_local_certificate_files "$BASE_DOMAIN"
+      fi
       CUSTOM_CERT_ID="$(ensure_custom_certificate)"
       echo "Usando certificado local NPM id=$CUSTOM_CERT_ID" >&2
       ;;
@@ -428,7 +504,6 @@ main() {
 
   SERVICES=(
     "api:daiana-python:5002"
-    "msteams:daiana-msteams:3978"
     "nginx:npm:81"
     "port:portainer:9000"
     "qdrant:daiana-qdrant:6333"
@@ -440,15 +515,23 @@ main() {
     "webui:daiana-webui:8080"
   )
 
+  SERVICES+=("msteams:daiana-msteams:3978")
+
+  matched=0
+  tls_certificate_failures=0
   for entry in "${SERVICES[@]}"; do
     IFS=":" read -r prefix default_host default_port <<<"$entry"
+    if [[ -n "$ONLY_PREFIX" && "$prefix" != "$ONLY_PREFIX" ]]; then
+      continue
+    fi
+    matched=1
     upper_prefix="$(echo "$prefix" | tr '[:lower:]' '[:upper:]')"
     up_host_var="HOST_${upper_prefix}"
     up_port_var="PORT_${upper_prefix}"
     domain_var="DOMAIN_${upper_prefix}"
-    eval "up_host=\"\${${up_host_var}:-$default_host}\""
-    eval "up_port=\"\${${up_port_var}:-$default_port}\""
-    eval "custom_domain=\"\${${domain_var}:-}\""
+    up_host="${!up_host_var:-$default_host}"
+    up_port="${!up_port_var:-$default_port}"
+    custom_domain="${!domain_var:-}"
 
     if [[ -n "$custom_domain" ]]; then
       domain="$custom_domain"
@@ -467,6 +550,9 @@ main() {
         ;;
       letsencrypt)
         cert_id="$(ensure_certificate "$domain")"
+        if [[ -z "$cert_id" || "$cert_id" == "null" ]]; then
+          tls_certificate_failures=$((tls_certificate_failures + 1))
+        fi
         ;;
       local|custom)
         cert_id="$CUSTOM_CERT_ID"
@@ -478,9 +564,32 @@ main() {
     ensure_proxy_host "$prefix" "$domain" "$up_host" "$up_port" "$cert_id"
   done
 
+  if [[ -n "$ONLY_PREFIX" && "$matched" -eq 0 ]]; then
+    echo "No se encontró ningún proxy host para ONLY_PREFIX=$ONLY_PREFIX" >&2
+    exit 1
+  fi
+
   case "$TLS_MODE" in
-    none) echo "Listo: proxy hosts creados sin TLS." ;;
-    *) echo "Listo: proxy hosts actualizados con certificados." ;;
+    none)
+      if [[ -n "$ONLY_PREFIX" ]]; then
+        echo "Listo: proxy host $ONLY_PREFIX actualizado sin TLS forzado."
+      else
+        echo "Listo: proxy hosts creados sin TLS."
+      fi
+      ;;
+    *)
+      if [[ "$tls_certificate_failures" -gt 0 ]]; then
+        if [[ -n "$ONLY_PREFIX" ]]; then
+          echo "Listo: proxy host $ONLY_PREFIX actualizado sin certificado TLS; revisá los errores anteriores."
+        else
+          echo "Listo: proxy hosts actualizados, pero $tls_certificate_failures certificado(s) Let's Encrypt no se pudieron crear."
+        fi
+      elif [[ -n "$ONLY_PREFIX" ]]; then
+        echo "Listo: proxy host $ONLY_PREFIX actualizado con certificado."
+      else
+        echo "Listo: proxy hosts actualizados con certificados."
+      fi
+      ;;
   esac
 }
 

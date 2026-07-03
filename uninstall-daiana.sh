@@ -68,11 +68,32 @@ fi
 log "Removing shared network"
 docker network rm daiana-mgmt >/dev/null 2>&1 || true
 
+remove_tree() {
+  local path="$1"
+  if [ ! -e "$path" ]; then
+    return 0
+  fi
+  if rm -rf "$path" 2>/dev/null; then
+    return 0
+  fi
+  echo "Permission denied removing $path"
+  if command -v sudo >/dev/null 2>&1; then
+    sudo rm -rf "$path" || {
+      echo "Failed to remove $path even with sudo."
+      exit 1
+    }
+  else
+    echo "Run manually: sudo rm -rf $path"
+    exit 1
+  fi
+}
+
 if [ "$purge_env" = "1" ]; then
   log "Removing Daiana and Portainer data directories"
-  rm -rf ./volumes/daiana ./volumes/portainer
-  log "Removing active .env and backup .env.old"
-  rm -f .env .env.old
+  remove_tree ./volumes/daiana
+  remove_tree ./volumes/portainer
+  log "Removing init SQL sentinel and active .env/.env.old"
+  rm -f .atl/install-daiana.init-sql.done .env .env.old
 else
   if [ -f ".env" ]; then
     log "Updating .env.old backup from active .env"

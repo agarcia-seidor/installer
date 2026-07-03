@@ -3,17 +3,19 @@ services:
     image: cloudseidoranalytics/daiana:v2.1.5
     container_name: daiana-next
     restart: unless-stopped
-    volumes: 
-      - ./volumes/daiana/static:/app/src/static   
+    volumes:
+      - ./volumes/daiana/static:/app/src/static
     environment:
       NEXT_PUBLIC_APP_URL: ${SITE_URL}
       NEXT_PUBLIC_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${ANON_KEY}
-      NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      WEBUI_PUBLIC_URL: ${WEBUI_BASE_URL}
+      WEBUI_AUTH_HANDOFF_SECRET: ${WEBUI_AUTH_HANDOFF_SECRET:-}
     depends_on:
       daianapython:
         condition: service_healthy
-        
+
   daianapython:
     image: cloudseidoranalytics/daianapython:v2.1.5
     container_name: daiana-python
@@ -21,8 +23,8 @@ services:
     working_dir: /app
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ffprobe_location : "C:\ffmpeg\ffprobe.exe"
-      ffmpeg_location : "C:\ffmpeg\ffmpeg.exe"
+      ffprobe_location: "C:\ffmpeg\ffprobe.exe"
+      ffmpeg_location: "C:\ffmpeg\ffmpeg.exe"
       CREDENTIAL_YT: ${CREDENTIAL_YT}
       SUPABASE_BASE_URL: ${SUPABASE_PUBLIC_URL}
       SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
@@ -59,7 +61,7 @@ services:
       LICENSE_ACTIVATION_BASE_URL: ${LICENSE_ACTIVATION_BASE_URL}
     tty: true
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://daianapython:5002/api/v1/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -f http://daianapython:5002/api/v1/health || exit 1" ]
       interval: 1m30s
       timeout: 30s
       retries: 5
@@ -69,7 +71,6 @@ services:
     image: cloudseidoranalytics/daianavanna:v1.30.4
     container_name: daiana-vanna
     restart: unless-stopped
-    platform: linux/amd64
     working_dir: /app
     command: python app.py
     environment:
@@ -86,7 +87,6 @@ services:
     image: qdrant/qdrant:v1.15.5
     container_name: daiana-qdrant
     restart: unless-stopped
-    platform: linux/arm64
     volumes:
       - ./volumes/daiana/qdrant/storage:/qdrant/storage
     environment:
@@ -100,10 +100,9 @@ services:
     image: cloudseidoranalytics/daianamsteams:v2.1.5
     container_name: daiana-msteams
     restart: unless-stopped
-    platform: linux/arm64
     environment:
       DAIANA_URL: ${BACKEND_BASE_URL}
-    # command: /bin/sh -c "gunicorn --bind 0.0.0.0:3978 --worker-class aiohttp.worker.GunicornWebWorker --timeout 600 app:app"
+    command: /bin/sh -c "gunicorn --bind 0.0.0.0:3978 --worker-class aiohttp.worker.GunicornWebWorker --timeout 600 app:app"
     tty: true
     depends_on:
       daianapython:
@@ -113,7 +112,6 @@ services:
     container_name: daiana-whatsapp
     image: cloudseidoranalytics/daianawhatsapp:v1.0.2
     restart: unless-stopped
-    platform: linux/amd64
     environment:
       FLASK_ENV: production
       PYTHONUNBUFFERED: 1
@@ -125,17 +123,16 @@ services:
       BOT_SECRET_KEY: ${BOT_SECRET_KEY}
     volumes:
       - ./volumes/daiana/whatsapp/log:/app/src/utils/log
-    # command: /bin/sh -c "gunicorn --bind 0.0.0.0:3008 --timeout 600 app:app"
+    command: /bin/sh -c "gunicorn --bind 0.0.0.0:3008 --timeout 600 app:app"
     tty: true
     depends_on:
       daianapython:
         condition: service_healthy
-   
+
   daianastudio:
     image: cloudseidoranalytics/daianastudio:v3.1.2
     container_name: daiana-studio
     restart: unless-stopped
-    platform: linux/amd64
     environment:
       DATABASE_TYPE: ${POSTGRES_DB}
       DATABASE_NAME: ${POSTGRES_DB}
@@ -168,7 +165,7 @@ services:
       TOOL_FUNCTION_BUILTIN_DEP: '*'
       TOOL_FUNCTION_EXTERNAL_DEP: 'mssql'
       STORAGE_TYPE: local
-      BLOB_STORAGE_PATH: /home/node/.flowise/storage      
+      BLOB_STORAGE_PATH: /home/node/.flowise/storage
     volumes:
       - ./volumes/daiana/flowise:/home/node/.flowise
       - ./volumes/daiana/flowise/logs:/home/node/.flowise/logs
@@ -185,7 +182,6 @@ services:
   daianawebui:
     image: cloudseidoranalytics/daianawebui:dev
     container_name: daiana-webui
-    platform: linux/amd64
     volumes:
       - ./volumes/daiana/webui/data:/app/backend/data
     environment:
@@ -204,7 +200,7 @@ services:
       JWT_EXPIRES_IN: 6h
       USER_AGENT: OpenWebUI/1.0
       DEFAULT_LOCALE: ${DEFAULT_LOCALE}
-      WEBUI_AUTH_HANDOFF_SECRET: 12nknsin6njxyuq>TQ
+      WEBUI_AUTH_HANDOFF_SECRET: ${WEBUI_AUTH_HANDOFF_SECRET:-}
       WEBUI_SESSION_COOKIE_SAME_SITE: none
       WEBUI_SESSION_COOKIE_SECURE: True
       WEBUI_AUTH_COOKIE_SAME_SITE: none

@@ -3,10 +3,11 @@
 # Bootstrap a self-hosted Supabase project on Linux (Debian/Ubuntu or RHEL/CentOS/Fedora).
 #
 # What it does:
-#   1. Installs prerequisites: git, openssl, jq, ca-certificates
+#   1. Installs prerequisites: git, curl, openssl, jq, ca-certificates, postgresql-client
 #   2. Installs Docker Engine + Compose plugin (if missing)
-#   3. Optionally installs the AWS CLI v2 (--with-aws)
-#   4. Sparse-clones the repo to extract the contents of ./docker
+#   3. Installs the Supabase CLI
+#   4. Optionally installs the AWS CLI v2 (--with-aws)
+#   5. Sparse-clones the repo to extract the contents of ./docker
 #   5. Creates a project directory in CWD and copies docker/* into it
 #   6. Prompts for the main URLs and writes them to .env
 #   7. Generates secrets and asymmetric API keys via utils/*.sh
@@ -119,23 +120,104 @@ pkg_install() {
 }
 
 install_base_packages() {
-    log "Installing base packages: git, openssl, jq, ca-certificates"
+    log "Installing base packages: git, curl, openssl, jq, ca-certificates, psql"
     pkg_update
     if [ "$OS_FAMILY" = "debian" ]; then
-        pkg_install git openssl jq ca-certificates \
+        pkg_install git curl openssl jq ca-certificates postgresql-client \
             apt-transport-https gnupg lsb-release
     else
-        pkg_install git openssl jq ca-certificates dnf-plugins-core
+        pkg_install git curl openssl jq ca-certificates postgresql dnf-plugins-core
+    fi
+}
+
+install_supabase_cli() {
+    local install_dir tmp installer
+    if [ "$(id -u)" -eq 0 ]; then
+        install_dir="${SUPABASE_INSTALL_DIR:-/usr/local/bin}"
+    else
+        install_dir="${SUPABASE_INSTALL_DIR:-$HOME/.supabase/bin}"
+    fi
+
+    command -v supabase >/dev/null 2>&1 && return 0
+
+    log "Installing Supabase CLI"
+    tmp="$(mktemp)"
+    installer="https://raw.githubusercontent.com/supabase/cli/main/install"
+    curl -fsSL "$installer" -o "$tmp"
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+        sudo env SUPABASE_INSTALL_DIR="$install_dir" bash "$tmp" --install-dir "$install_dir" --no-modify-path
+    else
+        SUPABASE_INSTALL_DIR="$install_dir" bash "$tmp" --install-dir "$install_dir" --no-modify-path
+    fi
+    rm -f "$tmp"
+    case ":$PATH:" in
+        *":$install_dir:"*) ;;
+        *) PATH="$install_dir:$PATH"; export PATH ;;
+    esac
+}
+
+docker_cmd() {
+    if command docker info >/dev/null 2>&1; then
+        command docker "$@"
+        return $?
+    fi
+    if [ -n "$SUDO" ]; then
+        $SUDO docker "$@"
+    else
+        command docker "$@"
+    fi
+}
+
+ensure_docker_group_access() {
+    target_user="${SUDO_USER:-$(id -un)}"
+
+    getent group docker >/dev/null 2>&1 || {
+        if [ -n "$SUDO" ]; then
+            $SUDO groupadd docker >/dev/null 2>&1 || true
+        else
+            groupadd docker >/dev/null 2>&1 || true
+        fi
+    }
+
+    if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        return 0
+    fi
+
+    if [ -n "$SUDO" ]; then
+        $SUDO usermod -aG docker "$target_user" >/dev/null 2>&1 || true
+    else
+        usermod -aG docker "$target_user" >/dev/null 2>&1 || true
+    fi
+
+    log "Added $target_user to the docker group. Run 'newgrp docker' in this terminal now, or log out and back in, for direct docker access without sudo."
+}
+
+warn_docker_group_refresh() {
+    local current_user target_user
+    current_user="$(id -un)"
+    target_user="${SUDO_USER:-$(id -un)}"
+
+    [ -n "$target_user" ] || return 0
+    [ "$current_user" = "$target_user" ] || return 0
+
+    if id -nG | tr ' ' '\n' | grep -qx docker; then
+        return 0
+    fi
+
+    if id -nG "$target_user" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        log "This shell has not refreshed docker group membership yet. Run 'newgrp docker' now, or log out and back in, for direct docker access without sudo."
     fi
 }
 
 docker_present() {
-    command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1
+    command -v docker >/dev/null 2>&1 && docker_cmd compose version >/dev/null 2>&1
 }
 
 install_docker() {
     if docker_present; then
         log "Docker already installed: $(docker --version)"
+        ensure_docker_group_access
+        warn_docker_group_refresh
         return 0
     fi
 
@@ -175,6 +257,8 @@ install_docker() {
     log "Enabling and starting docker service"
     $SUDO systemctl enable --now docker || warn "Could not enable docker via systemctl; start it manually."
 
+    ensure_docker_group_access
+    warn_docker_group_refresh
     docker_present || die "Docker installation finished but 'docker compose' is still unavailable."
 }
 
@@ -244,6 +328,8 @@ else
     install_base_packages
     install_docker
 fi
+
+install_supabase_cli
 
 if [ "$WITH_AWS" = "1" ]; then
     install_aws
@@ -322,10 +408,10 @@ log "Generating secrets and legacy API keys"
 sh utils/generate-keys.sh --update-env
 
 log "Generating asymmetric key pair and opaque API keys"
-sh utils/add-new-auth-keys.sh --update-env
+bash utils/add-new-auth-keys.sh --update-env
 
 log "Pulling Docker images"
-docker compose pull || warn "docker compose pull failed; you can retry later."
+docker_cmd compose pull || warn "docker compose pull failed; you can retry later."
 
 echo ""
 echo "Setup complete. Project ready at: $(pwd)"

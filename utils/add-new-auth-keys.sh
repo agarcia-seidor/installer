@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 #
 # Add asymmetric key pair and opaque API keys to a self-hosted Supabase installation.
 #
@@ -8,9 +8,9 @@
 #   - Internal: ES256 JWT API keys (ANON_KEY_ASYMMETRIC, SERVICE_ROLE_KEY_ASYMMETRIC)
 #
 # Usage:
-#   sh add-new-auth-keys.sh              # Interactive: prints keys, prompts to update .env
-#   sh add-new-auth-keys.sh --update-env # Prints keys and writes them to .env
-#   sh add-new-auth-keys.sh | tee keys   # Non-interactive: prints keys only
+#   bash add-new-auth-keys.sh              # Interactive: prints keys, prompts to update .env
+#   bash add-new-auth-keys.sh --update-env # Prints keys and writes them to .env
+#   bash add-new-auth-keys.sh | tee keys   # Non-interactive: prints keys only
 #
 # Prerequisites:
 #   - .env file with JWT_SECRET set (run generate-keys.sh first)
@@ -23,6 +23,18 @@ node_ok() {
     command -v node >/dev/null 2>&1 || return 1
     major=$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)
     [ -n "$major" ] && [ "$major" -ge 16 ] 2>/dev/null
+}
+
+docker_cmd() {
+    if command docker info >/dev/null 2>&1; then
+        command docker "$@"
+        return $?
+    fi
+    if command -v sudo >/dev/null 2>&1; then
+        sudo docker "$@"
+    else
+        command docker "$@"
+    fi
 }
 
 # Resolve how to run node: local install (>= 16) preferred, docker fallback.
@@ -38,17 +50,17 @@ else
         exit 1
     fi
 
-    if ! docker info >/dev/null 2>&1; then
-        echo "Error: docker is installed but the daemon is not running."
+    if ! docker_cmd info >/dev/null 2>&1; then
+        echo "Error: docker is installed but the daemon is not reachable (or your user cannot access /var/run/docker.sock). Add your user to the docker group and log out/in, or rerun with sudo."
         exit 1
     fi
 
-    if ! docker image inspect node:22-alpine >/dev/null 2>&1; then
+    if ! docker_cmd image inspect node:22-alpine >/dev/null 2>&1; then
         echo "Pulling node:22-alpine (first-run only)..."
-        docker pull node:22-alpine
+        docker_cmd pull node:22-alpine
     fi
 
-    node_runner="docker run --rm node:22-alpine node"
+    node_runner="docker_cmd run --rm node:22-alpine node"
 fi
 
 # Read JWT_SECRET from .env
@@ -150,8 +162,6 @@ console.log("JWT_JWKS=" + JSON.stringify(jwksPublic));
 # Read generated values
 SUPABASE_PUBLISHABLE_KEY=$(grep '^SUPABASE_PUBLISHABLE_KEY=' "$tmpdir/output" | cut -d= -f2-)
 SUPABASE_SECRET_KEY=$(grep '^SUPABASE_SECRET_KEY=' "$tmpdir/output" | cut -d= -f2-)
-ANON_KEY_ASYMMETRIC=$(grep '^ANON_KEY_ASYMMETRIC=' "$tmpdir/output" | cut -d= -f2-)
-SERVICE_ROLE_KEY_ASYMMETRIC=$(grep '^SERVICE_ROLE_KEY_ASYMMETRIC=' "$tmpdir/output" | cut -d= -f2-)
 JWT_KEYS=$(grep '^JWT_KEYS=' "$tmpdir/output" | cut -d= -f2-)
 JWT_JWKS=$(grep '^JWT_JWKS=' "$tmpdir/output" | cut -d= -f2-)
 
@@ -192,7 +202,7 @@ echo "Updating .env..."
 
 # Append new variables if they don't exist, or update them if they do
 for var in SUPABASE_PUBLISHABLE_KEY SUPABASE_SECRET_KEY ANON_KEY_ASYMMETRIC SERVICE_ROLE_KEY_ASYMMETRIC JWT_KEYS JWT_JWKS; do
-    eval "val=\$$var"
+    val=$(grep "^${var}=" "$tmpdir/output" | cut -d= -f2-)
     if grep -q "^${var}=" .env; then
         sed -i.old -e "s|^${var}=.*$|${var}=${val}|" .env
     else

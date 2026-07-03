@@ -506,8 +506,9 @@ services:
       - ./volumes/db/logs.sql:/docker-entrypoint-initdb.d/migrations/99-logs.sql:Z
       # Changes required for Pooler support
       - ./volumes/db/pooler.sql:/docker-entrypoint-initdb.d/migrations/99-pooler.sql:Z
-      # Seed data should be inserted last (alphabetical order)
-      - ./volumes/db/init/data.sql:/docker-entrypoint-initdb.d/seed.sql:Z
+      # Structural bootstrap only; data seeds run post-start from install-daiana.sh.
+      - ./volumes/db/init/schemas.sql:/docker-entrypoint-initdb.d/seed-00-schemas.sql:Z
+      - ./volumes/db/init/functions.sql:/docker-entrypoint-initdb.d/seed-90-functions.sql:Z
       # Use named volume to persist pgsodium decryption key between restarts
       - db-config:/etc/postgresql-custom
     healthcheck:
@@ -523,6 +524,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 70s
     environment:
       POSTGRES_HOST: /var/run/postgresql
       PGPORT: ${POSTGRES_PORT}
