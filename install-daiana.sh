@@ -683,7 +683,7 @@ seed_daiana_env() {
   ensure_derived WEBUI_BASE_URL "${public_scheme}://webui.${BASE_DOMAIN}"
   ensure_derived BACKEND_BASE_URL "${public_scheme}://api.${BASE_DOMAIN}"
   ensure_derived WS_BASE_URL "${public_scheme}://whatsapp.${BASE_DOMAIN}"
-  ensure_derived MS_BASE_URL "${public_scheme}://msteam.${BASE_DOMAIN}"
+  ensure_derived MS_BASE_URL "${public_scheme}://msteams.${BASE_DOMAIN}"
   ensure_derived VANNA_BASE_URL "${public_scheme}://vanna.${BASE_DOMAIN}"
   ensure_derived QDRANT_BASE_URL "${public_scheme}://qdrant.${BASE_DOMAIN}"
   ensure_derived CORS_ALLOW_ORIGIN "${public_scheme}://daiana.${BASE_DOMAIN}"
@@ -1476,13 +1476,13 @@ report_daiana_versions() {
     [ -n "$current" ] || current="missing"
     log "$service: current=$current target=$target"
   done <<'EOF'
-daiana-next|daiana-next|cloudseidoranalytics/daiana:v2.1.7
-daiana-python|daiana-python|cloudseidoranalytics/daianapython:v2.1.5
-daiana-vanna|daiana-vanna|cloudseidoranalytics/daianavanna:v1.30.4
-daiana-msteams|daiana-msteams|cloudseidoranalytics/daianamsteams:v2.1.5
-daiana-whatsapp|daiana-whatsapp|cloudseidoranalytics/daianawhatsapp:v1.0.2
+daiana-next|daiana-next|cloudseidoranalytics/daiana:v2.1.8
+daiana-python|daiana-python|cloudseidoranalytics/daianapython:v2.1.8
+daiana-vanna|daiana-vanna|cloudseidoranalytics/daianavanna:v2.1.8
+daiana-msteams|daiana-msteams|cloudseidoranalytics/daianamsteams:v2.1.8
+daiana-whatsapp|daiana-whatsapp|cloudseidoranalytics/daianawhatsapp:v2.1.8
 daiana-studio|daiana-studio|cloudseidoranalytics/daianastudio:v3.1.2
-daiana-webui|daiana-webui|cloudseidoranalytics/daianawebui:v2.1.7
+daiana-webui|daiana-webui|cloudseidoranalytics/daianawebui:v0.6.30
 EOF
 }
 

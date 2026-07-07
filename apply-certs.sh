@@ -146,7 +146,7 @@ refresh_public_urls_in_env() {
   persist_env_value WEBUI_BASE_URL "${public_scheme}://webui.${BASE_DOMAIN}"
   persist_env_value BACKEND_BASE_URL "${public_scheme}://api.${BASE_DOMAIN}"
   persist_env_value WS_BASE_URL "${public_scheme}://whatsapp.${BASE_DOMAIN}"
-  persist_env_value MS_BASE_URL "${public_scheme}://msteam.${BASE_DOMAIN}"
+  persist_env_value MS_BASE_URL "${public_scheme}://msteams.${BASE_DOMAIN}"
   persist_env_value VANNA_BASE_URL "${public_scheme}://vanna.${BASE_DOMAIN}"
   persist_env_value QDRANT_BASE_URL "${public_scheme}://qdrant.${BASE_DOMAIN}"
   persist_env_value CORS_ALLOW_ORIGIN "${public_scheme}://daiana.${BASE_DOMAIN}"
