@@ -1,5 +1,13 @@
 # Docker Image Versions
 
+## 2026-07-08
+- cloudseidoranalytics/daiana:v2.1.9 (prev cloudseidoranalytics/daiana:v2.1.8)
+- cloudseidoranalytics/daianapython:v2.1.9 (prev cloudseidoranalytics/daianapython:v2.1.8)
+- cloudseidoranalytics/daianavanna:v2.1.9 (prev cloudseidoranalytics/daianavanna:v2.1.8)
+- cloudseidoranalytics/daianamsteams:v2.1.9 (prev cloudseidoranalytics/daianamsteams:v2.1.8)
+- cloudseidoranalytics/daianawhatsapp:v2.1.9 (prev cloudseidoranalytics/daianawhatsapp:v2.1.8)
+- cloudseidoranalytics/daianawebui:v0.10.2 (prev cloudseidoranalytics/daianawebui:v0.6.30)
+
 ## 2026-06-17
 - supabase/postgres:17.6.1.136 (prev supabase/postgres:15.8.1.085)
 

@@ -1,6 +1,6 @@
 services:
   daiananext:
-    image: cloudseidoranalytics/daiana:v2.1.8
+    image: cloudseidoranalytics/daiana:v2.1.9
     container_name: daiana-next
     restart: unless-stopped
     volumes:
@@ -17,7 +17,7 @@ services:
         condition: service_healthy
 
   daianapython:
-    image: cloudseidoranalytics/daianapython:v2.1.8
+    image: cloudseidoranalytics/daianapython:v2.1.9
     container_name: daiana-python
     restart: unless-stopped
     working_dir: /app
@@ -68,7 +68,7 @@ services:
       start_period: 30s
 
   daianavanna:
-    image: cloudseidoranalytics/daianavanna:v2.1.8
+    image: cloudseidoranalytics/daianavanna:v2.1.9
     container_name: daiana-vanna
     restart: unless-stopped
     working_dir: /app
@@ -97,7 +97,7 @@ services:
         condition: service_healthy
 
   daianamsteams:
-    image: cloudseidoranalytics/daianamsteams:v2.1.8
+    image: cloudseidoranalytics/daianamsteams:v2.1.9
     container_name: daiana-msteams
     restart: unless-stopped
     environment:
@@ -110,7 +110,7 @@ services:
 
   daianawhatsapp:
      container_name: daiana-whatsapp
-     image: cloudseidoranalytics/daianawhatsapp:v2.1.8
+     image: cloudseidoranalytics/daianawhatsapp:v2.1.9
      restart: unless-stopped
      environment:
       PYTHONUNBUFFERED: 1
@@ -179,7 +179,7 @@ services:
           - node.role == manager
 
   daianawebui:
-    image: cloudseidoranalytics/daianawebui:v0.6.30
+    image: cloudseidoranalytics/daianawebui:v0.10.2
     container_name: daiana-webui
     volumes:
       - ./volumes/daiana/webui/data:/app/backend/data

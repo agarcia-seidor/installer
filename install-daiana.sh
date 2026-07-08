@@ -382,7 +382,7 @@ NPM_URL="${NPM_URL:-http://127.0.0.1:81}"
 PORTAINER_STACK_NAME="${PORTAINER_STACK_NAME:-portainer-bootstrap}"
 NPM_STACK_NAME="${NPM_STACK_NAME:-npm-bootstrap}"
 APP_STACK_NAME="${APP_STACK_NAME:-daiana-app}"
-DAIANA_REGISTRY_NAME="${DAIANA_REGISTRY_NAME:-daiana-images}"
+DAIANA_REGISTRY_NAME="${DAIANA_REGISTRY_NAME:-dockerhub-prod-sdr}"
 PORTAINER_ADMIN_USER="${PORTAINER_ADMIN_USER:-admin}"
 
 CREATED_ENV=0
@@ -841,6 +841,102 @@ render_compose() {
   "${COMPOSE_CMD[@]}" "${args[@]}" config --no-interpolate > "$output_file"
 }
 
+compose_service_image() {
+  local compose_file="$1"
+  local service_name="$2"
+  awk -v service="$service_name" '
+    $0 ~ "^  " service ":$" { in_service=1; next }
+    in_service && $0 ~ /^  [A-Za-z0-9_-]+:$/ { in_service=0 }
+    in_service && $1 == "image:" { print $2; exit }
+  ' "$compose_file"
+}
+
+image_tag() {
+  local image="$1"
+  printf '%s' "${image##*:}"
+}
+
+normalize_daiana_version() {
+  local version="$1"
+  [ -n "$version" ] || return 0
+  case "$version" in
+    v*) printf '%s' "$version" ;;
+    *) printf 'v%s' "$version" ;;
+  esac
+}
+
+prompt_version() {
+  local label="$1"
+  local default_value="$2"
+  local variable_value="${3:-}"
+  local value=""
+  if [ -n "$variable_value" ]; then
+    value="$variable_value"
+  else
+    value="$(prompt "$label" "$default_value")"
+  fi
+  printf '%s' "$value"
+}
+
+write_update_compose_override() {
+  local output_file="$1"
+  shift
+  {
+    printf 'services:\n'
+    while [ "$#" -gt 0 ]; do
+      printf '  %s:\n' "$1"
+      printf '    image: %s\n' "$2"
+      shift 2
+    done
+  } > "$output_file"
+}
+
+prepare_update_app_compose_files() {
+  [ "$ACTION" = "update" ] || return 0
+
+  local default_daiana_version target_daiana_version
+  local webui_version studio_version qdrant_version
+  default_daiana_version="$(image_tag "$(compose_service_image docker-compose.app.yml daiananext)")"
+  [ -n "$default_daiana_version" ] || die "Could not detect current Daiana app version from docker-compose.app.yml"
+
+  target_daiana_version="$(prompt_version 'Target Daiana app version' "$default_daiana_version" "${DAIANA_TARGET_VERSION:-}")"
+  target_daiana_version="$(normalize_daiana_version "$target_daiana_version")"
+  [ -n "$target_daiana_version" ] || target_daiana_version="$default_daiana_version"
+
+  webui_version="$(image_tag "$(compose_service_image docker-compose.app.yml daianawebui)")"
+  studio_version="$(image_tag "$(compose_service_image docker-compose.app.yml daianastudio)")"
+  qdrant_version="$(image_tag "$(compose_service_image docker-compose.app.yml daianaqdrant)")"
+
+  if [ -n "${DAIANA_WEBUI_TARGET_VERSION:-}" ]; then
+    webui_version="$(normalize_daiana_version "$DAIANA_WEBUI_TARGET_VERSION")"
+  fi
+  if [ -n "${DAIANA_STUDIO_TARGET_VERSION:-}" ]; then
+    studio_version="$(normalize_daiana_version "$DAIANA_STUDIO_TARGET_VERSION")"
+  fi
+  if [ -n "${QDRANT_TARGET_VERSION:-}" ]; then
+    qdrant_version="$QDRANT_TARGET_VERSION"
+  elif prompt_yes_no 'Update independently versioned images?' 'N'; then
+    webui_version="$(normalize_daiana_version "$(prompt 'Target WebUI version' "$webui_version")")"
+    studio_version="$(normalize_daiana_version "$(prompt 'Target Studio version' "$studio_version")")"
+    qdrant_version="$(prompt 'Target Qdrant version' "$qdrant_version")"
+  fi
+
+  UPDATE_COMPOSE_OVERRIDE_FILE="$(mktemp)"
+  write_update_compose_override "$UPDATE_COMPOSE_OVERRIDE_FILE" \
+    daiananext "cloudseidoranalytics/daiana:$target_daiana_version" \
+    daianapython "cloudseidoranalytics/daianapython:$target_daiana_version" \
+    daianavanna "cloudseidoranalytics/daianavanna:$target_daiana_version" \
+    daianamsteams "cloudseidoranalytics/daianamsteams:$target_daiana_version" \
+    daianawhatsapp "cloudseidoranalytics/daianawhatsapp:$target_daiana_version" \
+    daianawebui "cloudseidoranalytics/daianawebui:$webui_version" \
+    daianastudio "cloudseidoranalytics/daianastudio:$studio_version" \
+    daianaqdrant "qdrant/qdrant:$qdrant_version"
+
+  APP_DEPLOY_COMPOSE_FILES=("${APP_COMPOSE_FILES[@]}" "$UPDATE_COMPOSE_OVERRIDE_FILE")
+  log "Using Daiana app image version $target_daiana_version for update"
+  log "Using independently versioned images: webui=$webui_version studio=$studio_version qdrant=$qdrant_version"
+}
+
 extract_compose_vars() {
   local tmp
   tmp="$(mktemp)"
@@ -981,7 +1077,7 @@ portainer_registry_id() {
   portainer_get '/api/registries' | jq -r --arg name "$registry_name" '
     (if type == "object" and has("data") then .data else . end)
     | .[]?
-    | select(.Name == $name or (.URL == "registry-1.docker.io" and .Type == 6))
+    | select(.Name == $name or .Name == "daiana-images" or ((.URL == "docker.io" or .URL == "registry-1.docker.io") and .Type == 6))
     | .Id
   ' | head -n1
 }
@@ -1014,7 +1110,7 @@ portainer_ensure_private_registry() {
     --arg name "$registry_name" \
     --arg username "$registry_user" \
     --arg password "$registry_pat" \
-    '{Name:$name, URL:"registry-1.docker.io", Type:6, Authentication:true, Username:$username, Password:$password}')"
+    '{Name:$name, URL:"docker.io", Type:6, Authentication:true, Username:$username, Password:$password}')"
   registry_id="$(portainer_request_json POST /api/registries "$body" | jq -r '.Id // .id // empty')"
   [ -n "$registry_id" ] || die 'Could not create Portainer registry for private Daiana images'
   printf '[%s]' "$registry_id"
@@ -1027,13 +1123,18 @@ docker_login_private_registry() {
   [ -n "$registry_pat" ] || return 0
 
   log "Authenticating local Docker client to Docker Hub for private Daiana images"
-  printf '%s' "$registry_pat" | docker_cmd login registry-1.docker.io --username "$registry_user" --password-stdin >/dev/null
+  printf '%s' "$registry_pat" | docker_cmd login docker.io --username "$registry_user" --password-stdin >/dev/null
 }
 
 prepull_daiana_images() {
   log "Pre-pulling private Daiana images"
   docker_login_private_registry
-  "${COMPOSE_CMD[@]}" -f "${APP_COMPOSE_FILES[0]}" -f "${APP_COMPOSE_FILES[1]}" pull
+  local args=()
+  local file
+  for file in "${APP_DEPLOY_COMPOSE_FILES[@]}"; do
+    args+=( -f "$file" )
+  done
+  "${COMPOSE_CMD[@]}" "${args[@]}" pull
 }
 
 portainer_endpoint_id() {
@@ -1232,6 +1333,8 @@ bootstrap_portainer() {
 
 SUPABASE_COMPOSE_FILES=(docker-compose.yml)
 APP_COMPOSE_FILES=(docker-compose.yml docker-compose.app.yml)
+APP_DEPLOY_COMPOSE_FILES=("${APP_COMPOSE_FILES[@]}")
+UPDATE_COMPOSE_OVERRIDE_FILE=""
 
 SUPABASE_CORE_CONTAINERS=(
   supabase-studio
@@ -1470,25 +1573,33 @@ fi
 
 report_daiana_versions() {
   log "Checking Daiana image versions"
-  local service container target current
-  while IFS='|' read -r service container target; do
+  local stack_file service container label target current
+  stack_file="$(mktemp)"
+  render_compose "$stack_file" "${APP_DEPLOY_COMPOSE_FILES[@]}"
+  while IFS='|' read -r service container label; do
+    target="$(compose_service_image "$stack_file" "$service")"
     current="$(docker_cmd inspect --format '{{.Config.Image}}' "$container" 2>/dev/null || true)"
     [ -n "$current" ] || current="missing"
-    log "$service: current=$current target=$target"
+    log "$label: current=$current target=$target"
   done <<'EOF'
-daiana-next|daiana-next|cloudseidoranalytics/daiana:v2.1.8
-daiana-python|daiana-python|cloudseidoranalytics/daianapython:v2.1.8
-daiana-vanna|daiana-vanna|cloudseidoranalytics/daianavanna:v2.1.8
-daiana-msteams|daiana-msteams|cloudseidoranalytics/daianamsteams:v2.1.8
-daiana-whatsapp|daiana-whatsapp|cloudseidoranalytics/daianawhatsapp:v2.1.8
-daiana-studio|daiana-studio|cloudseidoranalytics/daianastudio:v3.1.2
-daiana-webui|daiana-webui|cloudseidoranalytics/daianawebui:v0.6.30
+daiananext|daiana-next|daiana-next
+daianapython|daiana-python|daiana-python
+daianavanna|daiana-vanna|daiana-vanna
+daianamsteams|daiana-msteams|daiana-msteams
+daianawhatsapp|daiana-whatsapp|daiana-whatsapp
+daianaqdrant|daiana-qdrant|daiana-qdrant
+daianastudio|daiana-studio|daiana-studio
+daianawebui|daiana-webui|daiana-webui
 EOF
+  rm -f "$stack_file"
 }
+
+CURRENT_PHASE="preparing update image versions"
+prepare_update_app_compose_files
 
 CURRENT_PHASE="building stack envs"
 NPM_STACK_ENV_JSON="$(stack_env_json docker-compose.npm.yml)"
-APP_STACK_ENV_JSON="$(stack_env_json "${APP_COMPOSE_FILES[@]}")"
+APP_STACK_ENV_JSON="$(stack_env_json "${APP_DEPLOY_COMPOSE_FILES[@]}")"
 
 if [ "$ACTION" = "update" ]; then
   CURRENT_PHASE="validating current versions"
@@ -1531,7 +1642,7 @@ CURRENT_PHASE="pre-pulling Daiana images"
 prepull_daiana_images || warn "Could not pre-pull Daiana images; Portainer may still require registry access"
 
 log "Deploying Daiana app stack via Portainer"
-portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "$PORTAINER_DAIA_REGISTRIES_JSON" "${APP_COMPOSE_FILES[@]}"
+portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "$PORTAINER_DAIA_REGISTRIES_JSON" "${APP_DEPLOY_COMPOSE_FILES[@]}"
 
 log "Waiting for NPM API"
 wait_for_http "$NPM_URL/api" "NPM API" 180 2 1 || die "NPM API did not become ready"
