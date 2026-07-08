@@ -18,10 +18,20 @@ cd "$ROOT_DIR"
 
 DRY_RUN=0
 ACTION="install"
+ROLLBACK_MODE=0
+ROLLBACK_LIST=0
+ROLLBACK_ID=""
 for arg in "$@"; do
   case "$arg" in
     --dry-run|-n) DRY_RUN=1 ;;
     --update|--upgrade) ACTION="update" ;;
+    --rollback) ACTION="update"; ROLLBACK_MODE=1 ;;
+    --list) ROLLBACK_LIST=1 ;;
+    *)
+      if [ "$ROLLBACK_MODE" = "1" ] && [ -z "$ROLLBACK_ID" ]; then
+        ROLLBACK_ID="$arg"
+      fi
+      ;;
   esac
 done
 
@@ -52,6 +62,53 @@ prompt_yes_no() {
     *) return 1 ;;
   esac
 }
+
+ensure_repo_synchronized() {
+  [ "$ACTION" = "update" ] || return 0
+  [ "${SKIP_REPO_SYNC_CHECK:-0}" != "1" ] || return 0
+  command -v git >/dev/null 2>&1 || return 0
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+  local upstream local_ref remote_ref base_ref status
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  [ -n "$upstream" ] || return 0
+
+  if [ "$DRY_RUN" = "1" ]; then
+    log "Would validate git repository sync with $upstream"
+    return 0
+  fi
+
+  log "Checking repository sync with $upstream"
+  git fetch --quiet
+  local_ref="$(git rev-parse @)"
+  remote_ref="$(git rev-parse '@{u}')"
+  base_ref="$(git merge-base @ '@{u}')"
+
+  if [ "$local_ref" = "$remote_ref" ]; then
+    return 0
+  fi
+
+  if [ "$local_ref" = "$base_ref" ]; then
+    status="$(git status --porcelain)"
+    if [ -n "$status" ]; then
+      die "Repository is behind $upstream but has local changes; commit/stash them before pulling"
+    fi
+    if prompt_yes_no "Repository is behind $upstream. Pull latest changes before continuing?" "y"; then
+      git pull --ff-only
+      return 0
+    fi
+    die "Repository must be synchronized before update/rollback"
+  fi
+
+  if [ "$remote_ref" = "$base_ref" ]; then
+    log "Repository has local commits ahead of $upstream; continuing without pulling"
+    return 0
+  fi
+
+  die "Repository has diverged from $upstream; resolve git history before update/rollback"
+}
+
+ensure_repo_synchronized
 
 install_supabase_cli() {
   local install_dir tmp installer
@@ -893,6 +950,10 @@ write_update_compose_override() {
 
 prepare_update_app_compose_files() {
   [ "$ACTION" = "update" ] || return 0
+  if [ "$ROLLBACK_MODE" = "1" ]; then
+    prepare_rollback_app_compose_files
+    return 0
+  fi
 
   local default_daiana_version target_daiana_version
   local webui_version studio_version qdrant_version
@@ -935,6 +996,81 @@ prepare_update_app_compose_files() {
   APP_DEPLOY_COMPOSE_FILES=("${APP_COMPOSE_FILES[@]}" "$UPDATE_COMPOSE_OVERRIDE_FILE")
   log "Using Daiana app image version $target_daiana_version for update"
   log "Using independently versioned images: webui=$webui_version studio=$studio_version qdrant=$qdrant_version"
+}
+
+list_update_snapshots() {
+  local history_dir="${UPDATE_HISTORY_DIR:-./volumes/daiana/update-history}"
+  [ -d "$history_dir" ] || return 0
+  find "$history_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort -r
+}
+
+latest_update_snapshot() {
+  list_update_snapshots | head -n1
+}
+
+prepare_rollback_app_compose_files() {
+  local history_dir="${UPDATE_HISTORY_DIR:-./volumes/daiana/update-history}"
+  local snapshot_id="$ROLLBACK_ID"
+  local snapshot_dir=""
+
+  if [ "$ROLLBACK_LIST" = "1" ]; then
+    list_update_snapshots
+    exit 0
+  fi
+
+  if [ -z "$snapshot_id" ]; then
+    snapshot_id="$(latest_update_snapshot)"
+  fi
+  [ -n "$snapshot_id" ] || die "No update rollback snapshots found in $history_dir"
+
+  snapshot_dir="$history_dir/$snapshot_id"
+  [ -f "$snapshot_dir/docker-compose.before.yml" ] || die "Rollback snapshot is missing docker-compose.before.yml: $snapshot_dir"
+
+  log "Selected rollback snapshot: $snapshot_id"
+  if [ -f "$snapshot_dir/versions.before.txt" ]; then
+    sed 's/^/  /' "$snapshot_dir/versions.before.txt" >&2 || true
+  fi
+  if ! prompt_yes_no "Rollback Daiana app stack to snapshot $snapshot_id?" "N"; then
+    die "Rollback cancelled"
+  fi
+
+  ROLLBACK_SNAPSHOT_DIR="$snapshot_dir"
+  APP_DEPLOY_COMPOSE_FILES=("$snapshot_dir/docker-compose.before.yml")
+}
+
+save_update_snapshot() {
+  [ "$ACTION" = "update" ] || return 0
+  [ "$ROLLBACK_MODE" != "1" ] || return 0
+  [ "$DRY_RUN" != "1" ] || return 0
+
+  local history_dir="${UPDATE_HISTORY_DIR:-./volumes/daiana/update-history}"
+  local snapshot_id snapshot_dir stack_id stack_content
+  snapshot_id="$(date -u +%Y%m%d-%H%M%S)"
+  snapshot_dir="$history_dir/$snapshot_id"
+  mkdir -p "$snapshot_dir"
+
+  stack_id="$(portainer_stack_id "$APP_STACK_NAME" || true)"
+  stack_content=""
+  if [ -n "$stack_id" ] && [ "$stack_id" != "null" ]; then
+    stack_content="$(portainer_request_json GET "/api/stacks/$stack_id/file?endpointId=$PORTAINER_ENDPOINT_ID" | jq -r '.StackFileContent // .stackFileContent // empty' || true)"
+  fi
+
+  if [ -n "$stack_content" ]; then
+    printf '%s\n' "$stack_content" > "$snapshot_dir/docker-compose.before.yml"
+  else
+    render_compose "$snapshot_dir/docker-compose.before.yml" "${APP_COMPOSE_FILES[@]}"
+  fi
+
+  report_daiana_versions "$snapshot_dir/docker-compose.before.yml" > "$snapshot_dir/versions.before.txt" 2>&1 || true
+  jq -n \
+    --arg id "$snapshot_id" \
+    --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg stack "$APP_STACK_NAME" \
+    --arg source "portainer-or-local-render" \
+    '{id:$id, created_at:$created_at, stack:$stack, type:"image-orchestration-rollback", source:$source, note:"Restores compose/images only; does not roll back databases, migrations, or volumes."}' \
+    > "$snapshot_dir/metadata.json"
+
+  log "Saved update rollback snapshot: $snapshot_dir"
 }
 
 extract_compose_vars() {
@@ -1335,6 +1471,8 @@ SUPABASE_COMPOSE_FILES=(docker-compose.yml)
 APP_COMPOSE_FILES=(docker-compose.yml docker-compose.app.yml)
 APP_DEPLOY_COMPOSE_FILES=("${APP_COMPOSE_FILES[@]}")
 UPDATE_COMPOSE_OVERRIDE_FILE=""
+UPDATE_HISTORY_DIR="${UPDATE_HISTORY_DIR:-./volumes/daiana/update-history}"
+ROLLBACK_SNAPSHOT_DIR=""
 
 SUPABASE_CORE_CONTAINERS=(
   supabase-studio
@@ -1563,9 +1701,11 @@ if [ "$ACTION" = "update" ] && [ "$DRY_RUN" = "1" ]; then
   cat <<EOF
 DRY RUN ONLY
 Would:
+- validate git repository sync with the configured upstream
 - validate current Daiana container image versions
+- create a rollback snapshot before a normal update
 - check for missing/new env vars
-- update Portainer stacks in place
+- update or roll back Portainer stacks in place
 - wait for NPM at $NPM_URL/api
 EOF
   exit 0
@@ -1574,8 +1714,12 @@ fi
 report_daiana_versions() {
   log "Checking Daiana image versions"
   local stack_file service container label target current
+  local compose_files=("$@")
+  if [ "${#compose_files[@]}" -eq 0 ]; then
+    compose_files=("${APP_DEPLOY_COMPOSE_FILES[@]}")
+  fi
   stack_file="$(mktemp)"
-  render_compose "$stack_file" "${APP_DEPLOY_COMPOSE_FILES[@]}"
+  render_compose "$stack_file" "${compose_files[@]}"
   while IFS='|' read -r service container label; do
     target="$(compose_service_image "$stack_file" "$service")"
     current="$(docker_cmd inspect --format '{{.Config.Image}}' "$container" 2>/dev/null || true)"
@@ -1610,6 +1754,23 @@ if [ "$ACTION" = "update" ]; then
   [ -n "$PORTAINER_TOKEN" ] || die "Could not authenticate to Portainer"
   PORTAINER_ENDPOINT_ID="$(portainer_ensure_endpoint)"
   [ -n "$PORTAINER_ENDPOINT_ID" ] || die "Could not determine Portainer endpoint id"
+  if [ "$ROLLBACK_MODE" = "1" ]; then
+    log "Preparing private registry access for Daiana images"
+    PORTAINER_DAIA_REGISTRIES_JSON="$(portainer_ensure_private_registry)"
+    CURRENT_PHASE="pre-pulling rollback images"
+    prepull_daiana_images || warn "Could not pre-pull rollback images; Portainer may still require registry access"
+    log "Rolling back Daiana app stack via Portainer"
+    portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "$PORTAINER_DAIA_REGISTRIES_JSON" "${APP_DEPLOY_COMPOSE_FILES[@]}"
+    cat <<EOF
+
+Rollback complete.
+- Restored snapshot: ${ROLLBACK_SNAPSHOT_DIR:-unknown}
+- Scope: compose/images only; databases, migrations, and volumes were not rolled back.
+EOF
+    exit 0
+  fi
+  CURRENT_PHASE="saving update rollback snapshot"
+  save_update_snapshot
 else
   CURRENT_PHASE="bootstrapping Portainer"
   ensure_network

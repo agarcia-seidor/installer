@@ -10,10 +10,12 @@ bash update-daiana.sh
 
 During an interactive update, the installer:
 
-1. shows the current Daiana image targets;
-2. asks for the target version for the main Daiana app images;
-3. optionally asks whether to update independently versioned images;
-4. renders a temporary compose override for Portainer without modifying the source compose files.
+1. validates that the installer repository is synchronized with its git upstream;
+2. shows the current Daiana image targets;
+3. saves a rollback snapshot of the current Daiana app stack;
+4. asks for the target version for the main Daiana app images;
+5. optionally asks whether to update independently versioned images;
+6. renders a temporary compose override for Portainer without modifying the source compose files.
 
 ## Main Daiana app version
 
@@ -64,6 +66,50 @@ Rules:
 - `DAIANA_TARGET_VERSION`, `DAIANA_WEBUI_TARGET_VERSION`, and `DAIANA_STUDIO_TARGET_VERSION` accept values with or without `v`.
 - `QDRANT_TARGET_VERSION` is used exactly as provided.
 - Source compose files are not rewritten during `update`; the selected versions are applied through a temporary compose override sent to Portainer.
+
+## Rollback
+
+Each normal update saves a rollback snapshot under:
+
+```text
+volumes/daiana/update-history/<timestamp>/
+```
+
+Rollback restores the Daiana app stack compose/images only. It does not roll back databases, app migrations, Qdrant data, WebUI data, or any other persisted volume.
+
+List snapshots:
+
+```bash
+bash update-daiana.sh --rollback --list
+```
+
+Restore the latest snapshot:
+
+```bash
+bash update-daiana.sh --rollback
+```
+
+Restore a specific snapshot:
+
+```bash
+bash update-daiana.sh --rollback 20260708-171500
+```
+
+The rollback command shows the selected snapshot and asks for confirmation before updating Portainer.
+
+## Repository sync guard
+
+Before `update` or `rollback`, the installer checks the current git branch against its upstream when it is running inside a git worktree with a configured upstream. If git or upstream metadata is unavailable, the check is skipped.
+
+| State | Behavior |
+|---|---|
+| Up to date | Continues normally |
+| Behind upstream | Asks permission to run `git pull --ff-only` |
+| Behind with local changes | Stops; commit or stash local changes first |
+| Ahead only | Continues and reports the local commits |
+| Diverged | Stops; resolve git history manually |
+
+Set `SKIP_REPO_SYNC_CHECK=1` only when you intentionally need to run from the current local files without contacting git upstream.
 
 ## Docker Hub registry
 
