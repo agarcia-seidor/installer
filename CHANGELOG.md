@@ -20,6 +20,18 @@ Check the main Supabase [changelog](https://github.com/orgs/supabase/discussions
 
 ---
 
+## [v0.1.0](https://github.com/agarcia-seidor/installer/releases/tag/v0.1.0) - 2026-07-08
+
+### Daiana installer
+- Added formal repository version metadata with `VERSION`.
+- Added selectable Daiana image versions during `update`, including optional independently versioned images.
+- Added update rollback snapshots under `volumes/daiana/update-history/<timestamp>/` and `update-daiana.sh --rollback`.
+- Added repository sync guard before update/rollback, with explicit approval before `git pull --ff-only`.
+- Updated Docker Hub registry defaults to `dockerhub-prod-sdr` with URL `docker.io`, while preserving legacy registry compatibility.
+- Bumped Daiana app images to `v2.1.9` and WebUI to `v0.10.2`.
+
+---
+
 ## [0.6.0](https://github.com/supabase/supabase/releases/tag/self-hosted/v0.6.0) - 2026-06-17
 
 ⚠️ **Note:** This update contains **breaking changes**. Make sure to read the **important** details below:
