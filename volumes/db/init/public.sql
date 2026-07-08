@@ -224,21 +224,33 @@ SELECT pg_catalog.setval('"public"."history_id_seq"', 1, false);
 -- Name: tenant_license_activation_attempts_id_seq; Type: SEQUENCE SET; Schema: public; Owner: supabase_admin
 --
 
-SELECT pg_catalog.setval('"public"."tenant_license_activation_attempts_id_seq"', 1, false);
+SELECT pg_catalog.setval(
+    '"public"."tenant_license_activation_attempts_id_seq"',
+    COALESCE((SELECT MAX("id") FROM "public"."tenant_license_activation_attempts"), 1),
+    (SELECT COUNT(*) > 0 FROM "public"."tenant_license_activation_attempts")
+);
 
 
 --
 -- Name: tenant_license_activations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: supabase_admin
 --
 
-SELECT pg_catalog.setval('"public"."tenant_license_activations_id_seq"', 1, false);
+SELECT pg_catalog.setval(
+    '"public"."tenant_license_activations_id_seq"',
+    COALESCE((SELECT MAX("id") FROM "public"."tenant_license_activations"), 1),
+    (SELECT COUNT(*) > 0 FROM "public"."tenant_license_activations")
+);
 
 
 --
 -- Name: tenant_plans_id_seq; Type: SEQUENCE SET; Schema: public; Owner: supabase_admin
 --
 
-SELECT pg_catalog.setval('"public"."tenant_plans_id_seq"', 1, false);
+SELECT pg_catalog.setval(
+    '"public"."tenant_plans_id_seq"',
+    COALESCE((SELECT MAX("id") FROM "public"."tenant_plans"), 1),
+    (SELECT COUNT(*) > 0 FROM "public"."tenant_plans")
+);
 
 
 --
