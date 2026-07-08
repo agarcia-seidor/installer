@@ -1,101 +1,133 @@
-.PHONY: help up down restart stop ps logs bootstrap
+.PHONY: help install certs update rollback rollback-list uninstall purge version up down restart stop ps logs compose-config bootstrap
 
 COMPOSE_FILES := -f docker-compose.yml -f docker-compose.app.yml -f docker-compose.npm.yml
 COMPOSE_CMD := $(shell if docker compose version >/dev/null 2>&1; then printf 'docker compose'; elif command -v docker-compose >/dev/null 2>&1; then printf 'docker-compose'; else printf 'docker compose'; fi)
 COMPOSE := $(COMPOSE_CMD) $(COMPOSE_FILES)
-WIPE_DIRS := volumes/db/data volumes/storage/stub volumes/daiana volumes/qdrant
+WIPE_DIRS := volumes/db/data volumes/storage/stub volumes/daiana/static volumes/daiana/qdrant volumes/daiana/whatsapp volumes/daiana/flowise volumes/daiana/webui
 WIPE ?= 0
+SNAPSHOT ?=
 
 .DEFAULT_GOAL := help
 
 help:
 	@echo "╔════════════════════════════════════════════════════════════╗"
-	@echo "║          Comandos disponibles                              ║"
+	@echo "║          Daiana installer commands                         ║"
 	@echo "╚════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "Stack completo:"
-	@echo "  make up                      Levanta Docker Compose"
-	@echo "  make up WIPE=1               Levanta Docker Compose y limpia volúmenes"
-	@echo "                  - Si está corriendo, lo baja primero"
-	@echo "                  - Limpia: db/data, storage/stub, daiana, qdrant"
-	@echo "  make down                    Baja Docker Compose"
-	@echo "  make down WIPE=1             Baja Docker Compose y limpia volúmenes"
-	@echo "  make ps                      Muestra el estado del stack"
-	@echo "  make logs                    Muestra logs de todo el stack"
+	@echo "Lifecycle:"
+	@echo "  make install                  Run install-daiana.sh"
+	@echo "  make certs                    Apply TLS to existing NPM proxy hosts"
+	@echo "  make update                   Run update-daiana.sh"
+	@echo "  make rollback                 Roll back to latest update snapshot"
+	@echo "  make rollback SNAPSHOT=<id>   Roll back to a specific snapshot"
+	@echo "  make rollback-list            List update rollback snapshots"
+	@echo "  make uninstall                Run uninstall-daiana.sh"
+	@echo "  make purge                    Run uninstall-daiana.sh --purge"
+	@echo "  make version                  Show installer version and git describe"
 	@echo ""
-	@echo "Servicio individual:"
-	@echo "  make up SERVICE=<servicio>      Levanta un servicio"
-	@echo "  make restart SERVICE=<servicio> Reinicia un servicio"
-	@echo "  make stop SERVICE=<servicio>    Detiene un servicio"
-	@echo "  make down SERVICE=<servicio>    Baja y elimina un servicio"
-	@echo "  make ps SERVICE=<servicio>      Muestra el estado de un servicio"
-	@echo "  make logs SERVICE=<servicio>    Muestra logs de un servicio"
+	@echo "Local compose helpers (developer/local only):"
+	@echo "  make up                      Start Docker Compose directly"
+	@echo "  make up WIPE=1               Start after cleaning runtime data, preserving update-history"
+	@echo "  make down                    Stop Docker Compose directly"
+	@echo "  make down WIPE=1             Stop and clean runtime data, preserving update-history"
+	@echo "  make ps                      Show compose status"
+	@echo "  make logs                    Follow compose logs"
+	@echo "  make compose-config          Render compose config"
 	@echo ""
-	@echo "  make bootstrap  Ejecuta npm_ssl_bootstrap"
-	@echo "                  - Configura SSL para npm"
+	@echo "Service helper variables:"
+	@echo "  SERVICE=<service>            Limit up/down/restart/stop/ps/logs"
 	@echo ""
-	@echo "  make help       Muestra esta información"
-	@echo ""
+
+install:
+	@bash install-daiana.sh
+
+certs:
+	@bash apply-certs.sh
+
+update:
+	@bash update-daiana.sh
+
+rollback:
+	@if [ -n "$(SNAPSHOT)" ]; then \
+		bash update-daiana.sh --rollback "$(SNAPSHOT)"; \
+	else \
+		bash update-daiana.sh --rollback; \
+	fi
+
+rollback-list:
+	@bash update-daiana.sh --rollback --list
+
+uninstall:
+	@bash uninstall-daiana.sh
+
+purge:
+	@bash uninstall-daiana.sh --purge
+
+version:
+	@printf 'Installer version: '
+	@if [ -f VERSION ]; then cat VERSION; else echo 'unknown'; fi
+	@printf 'Git version: '
+	@git describe --tags --always --dirty 2>/dev/null || echo 'unknown'
 
 up:
 	@if [ -n "$(SERVICE)" ]; then \
 		if [ "$(WIPE)" = "1" ]; then \
-			echo "⚠️  WIPE=1 se ignora cuando SERVICE está definido"; \
+			echo "⚠️  WIPE=1 is ignored when SERVICE is set"; \
 		fi; \
-		echo "Levantando servicio $(SERVICE)..."; \
+		echo "Starting service $(SERVICE)..."; \
 		$(COMPOSE) up -d "$(SERVICE)"; \
-		echo "✓ Servicio $(SERVICE) levantado"; \
+		echo "✓ Service $(SERVICE) started"; \
 	else \
 		if [ "$(WIPE)" = "1" ]; then \
 			if $(COMPOSE) ps 2>/dev/null | grep -q "Up"; then \
-				echo "Docker Compose está ejecutándose. Bajando..."; \
+				echo "Docker Compose is running. Stopping first..."; \
 				$(COMPOSE) down; \
 			fi; \
-			echo "Limpiando volúmenes..."; \
+			echo "Cleaning runtime data while preserving volumes/daiana/update-history..."; \
 			rm -rf $(WIPE_DIRS); \
 		fi; \
-		echo "Levantando Docker Compose..."; \
+		echo "Starting Docker Compose directly..."; \
 		$(COMPOSE) up -d; \
-		echo "✓ Docker Compose levantado"; \
+		echo "✓ Docker Compose started"; \
 	fi
 
 down:
 	@if [ -n "$(SERVICE)" ]; then \
 		if [ "$(WIPE)" = "1" ]; then \
-			echo "⚠️  WIPE=1 se ignora cuando SERVICE está definido"; \
+			echo "⚠️  WIPE=1 is ignored when SERVICE is set"; \
 		fi; \
-		echo "Bajando servicio $(SERVICE)..."; \
+		echo "Stopping service $(SERVICE)..."; \
 		$(COMPOSE) stop "$(SERVICE)"; \
 		$(COMPOSE) rm -f "$(SERVICE)"; \
 	else \
-		echo "Bajando Docker Compose..."; \
+		echo "Stopping Docker Compose directly..."; \
 		$(COMPOSE) down; \
+		if [ "$(WIPE)" = "1" ]; then \
+			echo "Cleaning runtime data while preserving volumes/daiana/update-history..."; \
+			rm -rf $(WIPE_DIRS); \
+		fi; \
 	fi
-	@if [ "$(WIPE)" = "1" ]; then \
-		echo "Limpiando volúmenes..."; \
-		rm -rf $(WIPE_DIRS); \
-	fi
-	@echo "✓ Docker Compose bajado"
+	@echo "✓ Docker Compose stopped"
 
 restart:
 	@if [ -n "$(SERVICE)" ]; then \
-		echo "Reiniciando servicio $(SERVICE)..."; \
+		echo "Restarting service $(SERVICE)..."; \
 		$(COMPOSE) restart "$(SERVICE)"; \
 	else \
-		echo "Reiniciando Docker Compose..."; \
+		echo "Restarting Docker Compose directly..."; \
 		$(COMPOSE) restart; \
 	fi
-	@echo "✓ Docker Compose reiniciado"
+	@echo "✓ Docker Compose restarted"
 
 stop:
 	@if [ -n "$(SERVICE)" ]; then \
-		echo "Deteniendo servicio $(SERVICE)..."; \
+		echo "Stopping service $(SERVICE)..."; \
 		$(COMPOSE) stop "$(SERVICE)"; \
 	else \
-		echo "Deteniendo Docker Compose..."; \
+		echo "Stopping Docker Compose directly..."; \
 		$(COMPOSE) stop; \
 	fi
-	@echo "✓ Docker Compose detenido"
+	@echo "✓ Docker Compose stopped"
 
 ps:
 	@if [ -n "$(SERVICE)" ]; then \
@@ -111,24 +143,28 @@ logs:
 		$(COMPOSE) logs -f; \
 	fi
 
+compose-config:
+	@$(COMPOSE) config
+
 bootstrap:
+	@echo "⚠️  make bootstrap is kept for local compatibility. Prefer: make certs"
 	@if [ ! -f .env ]; then \
-		echo "❌ .env no encontrado"; \
+		echo "❌ .env not found"; \
 		exit 1; \
 	fi
-	@echo "Cargando variables de .env..."
+	@echo "Loading variables from .env..."
 	@set -a; . .env; set +a; \
 	if [ -z "$$NPM_ADMIN_EMAIL" ] || [ -z "$$NPM_ADMIN_PASS" ]; then \
-		echo "❌ Faltan variables requeridas en .env:"; \
+		echo "❌ Missing required variables in .env:"; \
 		[ -z "$$NPM_ADMIN_EMAIL" ] && echo "  - NPM_ADMIN_EMAIL"; \
 		[ -z "$$NPM_ADMIN_PASS" ] && echo "  - NPM_ADMIN_PASS"; \
 		exit 1; \
 	fi; \
-	echo "✓ Variables cargadas:"; \
+	echo "✓ Variables loaded:"; \
 	echo "  - NPM_ADMIN_EMAIL: $$NPM_ADMIN_EMAIL"; \
-	echo "  - NPM_ADMIN_PASS: (configurado)"; \
+	echo "  - NPM_ADMIN_PASS: (configured)"; \
 	[ -n "$$BASE_DOMAIN" ] && echo "  - BASE_DOMAIN: $$BASE_DOMAIN"; \
 	echo ""; \
-	echo "Ejecutando npm_ssl_bootstrap..."; \
+	echo "Running npm_ssl_bootstrap..."; \
 	bash utils/npm_ssl_bootstrap.sh; \
-	echo "✓ Bootstrap completado"
+	echo "✓ Bootstrap complete"

@@ -121,19 +121,23 @@ For upstream Supabase concepts and service-specific configuration, use the offic
 
 ## Local development helpers
 
-The repo includes a Makefile for local compose workflows:
+The repo includes a Makefile as a shortcut to the same lifecycle scripts:
 
-- `make up` — start the stack
-- `make up WIPE=1` — start after cleaning runtime data
-- `make down` — stop the stack
-- `make down WIPE=1` — stop and clean runtime data
-- `make bootstrap` — configure NPM SSL
+- `make install` — run `install-daiana.sh`
+- `make certs` — run `apply-certs.sh`
+- `make update` — run `update-daiana.sh`
+- `make rollback` — restore the latest update snapshot
+- `make rollback SNAPSHOT=<id>` — restore a specific snapshot
+- `make rollback-list` — list update snapshots
+- `make uninstall` — run `uninstall-daiana.sh`
+- `make purge` — run `uninstall-daiana.sh --purge`
+- `make version` — show `VERSION` and Git tag information
 
-If you want to inspect compose output directly, use:
+It also keeps direct compose helpers for local/developer use:
 
-```bash
-sh run.sh config
-```
+- `make up`, `make down`, `make ps`, `make logs`
+- `make up WIPE=1`, `make down WIPE=1` — clean runtime data while preserving `volumes/daiana/update-history`
+- `make compose-config`
 
 ## Security notes
 
