@@ -74,6 +74,31 @@ Rules:
 - `QDRANT_TARGET_VERSION` is used exactly as provided.
 - Source compose files are not rewritten during `update`; the selected versions are applied through a temporary compose override sent to Portainer.
 
+## Digest-bound deployment bundles
+
+Phase 1 accepts an explicitly selected JSON deployment bundle without changing any default image pin:
+
+```bash
+DAIANA_DEPLOYMENT_BUNDLE=/secure/releases/daiana-bundle.json \
+bash update-daiana.sh
+```
+
+The version 1 contract contains `schema_version: 1`, `deployment_mode: "complete-stack-replacement"`, and exactly three image records under `images`: `next`, `python`, and `studio`. Every image record must contain:
+
+| Field | Contract |
+|---|---|
+| `reference` | Full OCI reference ending in `@sha256:<64 lowercase hex characters>`; an optional tag may precede the digest |
+| `index_digest` | Authoritative OCI index digest, identical to the reference digest |
+| `source_commit` | 40-character lowercase hexadecimal source commit SHA |
+
+The bundle is read once, then the same captured bytes are validated, hashed, and converted to a literal JSON Compose override. Missing or extra records, mutable-only references, invalid provenance, digest mismatches, and unknown schema versions fail closed. There is no tag fallback or partial application.
+
+After all existing preconditions and migrations complete, the installer pre-pulls all three images. Any pull failure stops before Portainer. A successful operation submits one complete Portainer stack replacement containing all three literal references; it does not claim a sequential service rollout. Migration sequencing remains a separate deployment concern.
+
+Before update, the installer requires the exact current Portainer stack content and Env array, stores the Env in a protected snapshot file, and records its SHA-256 in metadata. Rollback submits both saved values directly, so placeholders are not re-resolved from current environment values or repository defaults. Rollback still does not reverse migrations or persisted data.
+
+Phase 2 inserts approved Next, Python, and Studio index digests and source commits into a release bundle. Until the Studio index digest is available, do not publish or select a production bundle.
+
 ## Rollback
 
 Each normal update saves a rollback snapshot under:

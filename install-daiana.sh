@@ -50,6 +50,8 @@ run() {
 
 # shellcheck source=utils/daiana-migrations.sh
 source "$ROOT_DIR/utils/daiana-migrations.sh"
+# shellcheck source=utils/deployment-bundle.sh
+source "$ROOT_DIR/utils/deployment-bundle.sh"
 
 prompt_yes_no() {
   local question="$1"
@@ -911,11 +913,6 @@ compose_service_image() {
   ' "$compose_file"
 }
 
-image_tag() {
-  local image="$1"
-  printf '%s' "${image##*:}"
-}
-
 normalize_daiana_version() {
   local version="$1"
   [ -n "$version" ] || return 0
@@ -952,11 +949,22 @@ write_update_compose_override() {
 }
 
 prepare_update_app_compose_files() {
-  [ "$ACTION" = "update" ] || return 0
   if [ "$ROLLBACK_MODE" = "1" ]; then
     prepare_rollback_app_compose_files
     return 0
   fi
+
+  if [ -n "${DAIANA_DEPLOYMENT_BUNDLE:-}" ]; then
+    [ "$ACTION" = "update" ] || die "Deployment bundles may only be selected during update"
+    load_deployment_bundle "$DAIANA_DEPLOYMENT_BUNDLE"
+    UPDATE_COMPOSE_OVERRIDE_FILE="$(mktemp)"
+    write_deployment_bundle_override "$UPDATE_COMPOSE_OVERRIDE_FILE"
+    APP_DEPLOY_COMPOSE_FILES=("${APP_COMPOSE_FILES[@]}" "$UPDATE_COMPOSE_OVERRIDE_FILE")
+    log "Validated complete deployment bundle sha256:$BUNDLE_SHA256"
+    return 0
+  fi
+
+  [ "$ACTION" = "update" ] || return 0
 
   local default_daiana_version target_daiana_version
   local webui_version studio_version qdrant_version
@@ -1028,6 +1036,8 @@ prepare_rollback_app_compose_files() {
 
   snapshot_dir="$history_dir/$snapshot_id"
   [ -f "$snapshot_dir/docker-compose.before.yml" ] || die "Rollback snapshot is missing docker-compose.before.yml: $snapshot_dir"
+  ROLLBACK_STACK_ENV_JSON="$(read_snapshot_env "$snapshot_dir/portainer-env.before.json")" \
+    || die "Could not load saved Portainer Env"
 
   log "Selected rollback snapshot: $snapshot_id"
   if [ -f "$snapshot_dir/versions.before.txt" ]; then
@@ -1047,30 +1057,37 @@ save_update_snapshot() {
   [ "$DRY_RUN" != "1" ] || return 0
 
   local history_dir="${UPDATE_HISTORY_DIR:-./volumes/daiana/update-history}"
-  local snapshot_id snapshot_dir stack_id stack_content
+  local snapshot_id snapshot_dir stack_id
   snapshot_id="$(date -u +%Y%m%d-%H%M%S)"
   snapshot_dir="$history_dir/$snapshot_id"
+  LAST_UPDATE_SNAPSHOT_DIR="$snapshot_dir"
   mkdir -p "$snapshot_dir"
+  chmod 700 "$snapshot_dir"
 
   stack_id="$(portainer_stack_id "$APP_STACK_NAME" || true)"
-  stack_content=""
-  if [ -n "$stack_id" ] && [ "$stack_id" != "null" ]; then
-    stack_content="$(portainer_request_json GET "/api/stacks/$stack_id/file?endpointId=$PORTAINER_ENDPOINT_ID" | jq -r '.StackFileContent // .stackFileContent // empty' || true)"
-  fi
-
-  if [ -n "$stack_content" ]; then
-    printf '%s\n' "$stack_content" > "$snapshot_dir/docker-compose.before.yml"
-  else
-    render_compose "$snapshot_dir/docker-compose.before.yml" "${APP_COMPOSE_FILES[@]}"
-  fi
+  [ -n "$stack_id" ] && [ "$stack_id" != "null" ] || die "Cannot snapshot missing Portainer stack: $APP_STACK_NAME"
+  portainer_request_json GET "/api/stacks/$stack_id/file?endpointId=$PORTAINER_ENDPOINT_ID" \
+    | jq -jer '.StackFileContent // .stackFileContent // empty' > "$snapshot_dir/docker-compose.before.yml" \
+    || die "Could not capture exact Portainer stack content"
+  [ -s "$snapshot_dir/docker-compose.before.yml" ] || die "Portainer returned empty stack content"
+  install -m 600 /dev/null "$snapshot_dir/portainer-env.before.json"
+  portainer_request_json GET "/api/stacks/$stack_id?endpointId=$PORTAINER_ENDPOINT_ID" \
+    | jq -ce '.Env // .env' > "$snapshot_dir/portainer-env.before.json" \
+    || die "Could not capture Portainer stack Env"
+  read_snapshot_env "$snapshot_dir/portainer-env.before.json" >/dev/null \
+    || die "Could not validate Portainer stack Env"
 
   report_daiana_versions "$snapshot_dir/docker-compose.before.yml" > "$snapshot_dir/versions.before.txt" 2>&1 || true
   jq -n \
     --arg id "$snapshot_id" \
     --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg stack "$APP_STACK_NAME" \
-    --arg source "portainer-or-local-render" \
-    '{id:$id, created_at:$created_at, stack:$stack, type:"image-orchestration-rollback", source:$source, note:"Restores compose/images only; does not roll back databases, migrations, or volumes."}' \
+    --arg source "portainer-exact-stack" \
+    --arg env_sha256 "$(deployment_bundle_sha256 "$(<"$snapshot_dir/portainer-env.before.json")")" \
+    --argjson selected_bundle "$(deployment_bundle_metadata_json)" \
+    '{id:$id, created_at:$created_at, stack:$stack, type:"image-orchestration-rollback", source:$source,
+      portainer_env_sha256:$env_sha256, selected_bundle:$selected_bundle,
+      note:"Restores compose/images only; does not roll back databases, migrations, or volumes."}' \
     > "$snapshot_dir/metadata.json"
 
   log "Saved update rollback snapshot: $snapshot_dir"
@@ -1323,6 +1340,15 @@ portainer_upsert_stack() {
   stack_file="$(mktemp)"
   render_compose "$stack_file" "$@"
 
+  portainer_submit_stack_file "$stack_name" "$stack_env_json" "$stack_registries_json" "$stack_file"
+  rm -f "$stack_file"
+}
+
+portainer_submit_stack_file() {
+  local stack_name="$1"
+  local stack_env_json="$2"
+  local stack_registries_json="${3:-}"
+  local stack_file="$4"
   local body
   body="$(jq -Rs --arg name "$stack_name" --argjson env "$stack_env_json" --arg registries "$stack_registries_json" '
     {Name:$name, StackFileContent:., Env:$env}
@@ -1338,8 +1364,6 @@ portainer_upsert_stack() {
     log "Creating Portainer stack: $stack_name"
     portainer_request_json POST "/api/stacks/create/standalone/string?endpointId=$PORTAINER_ENDPOINT_ID" "$body" >/dev/null
   fi
-
-  rm -f "$stack_file"
 }
 
 ensure_network() {
@@ -1476,6 +1500,8 @@ APP_DEPLOY_COMPOSE_FILES=("${APP_COMPOSE_FILES[@]}")
 UPDATE_COMPOSE_OVERRIDE_FILE=""
 UPDATE_HISTORY_DIR="${UPDATE_HISTORY_DIR:-./volumes/daiana/update-history}"
 ROLLBACK_SNAPSHOT_DIR=""
+ROLLBACK_STACK_ENV_JSON=""
+LAST_UPDATE_SNAPSHOT_DIR=""
 
 SUPABASE_CORE_CONTAINERS=(
   supabase-studio
@@ -1746,8 +1772,13 @@ CURRENT_PHASE="preparing update image versions"
 prepare_update_app_compose_files
 
 CURRENT_PHASE="building stack envs"
-NPM_STACK_ENV_JSON="$(stack_env_json docker-compose.npm.yml)"
-APP_STACK_ENV_JSON="$(stack_env_json "${APP_DEPLOY_COMPOSE_FILES[@]}")"
+if [ "$ROLLBACK_MODE" = "1" ]; then
+  NPM_STACK_ENV_JSON='[]'
+  APP_STACK_ENV_JSON="$ROLLBACK_STACK_ENV_JSON"
+else
+  NPM_STACK_ENV_JSON="$(stack_env_json docker-compose.npm.yml)"
+  APP_STACK_ENV_JSON="$(stack_env_json "${APP_DEPLOY_COMPOSE_FILES[@]}")"
+fi
 
 if [ "$ACTION" = "update" ]; then
   CURRENT_PHASE="validating current versions"
@@ -1764,7 +1795,7 @@ if [ "$ACTION" = "update" ]; then
     CURRENT_PHASE="pre-pulling rollback images"
     prepull_daiana_images || warn "Could not pre-pull rollback images; Portainer may still require registry access"
     log "Rolling back Daiana app stack via Portainer"
-    portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "$PORTAINER_DAIA_REGISTRIES_JSON" "${APP_DEPLOY_COMPOSE_FILES[@]}"
+    portainer_submit_stack_file "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "$PORTAINER_DAIA_REGISTRIES_JSON" "$ROLLBACK_SNAPSHOT_DIR/docker-compose.before.yml"
     cat <<EOF
 
 Rollback complete.
@@ -1808,10 +1839,20 @@ log "Preparing private registry access for Daiana images"
 PORTAINER_DAIA_REGISTRIES_JSON="$(portainer_ensure_private_registry)"
 
 CURRENT_PHASE="pre-pulling Daiana images"
-prepull_daiana_images || warn "Could not pre-pull Daiana images; Portainer may still require registry access"
+if [ "${BUNDLE_ACTIVE:-0}" = "1" ]; then
+  prepull_deployment_bundle_images
+else
+  prepull_daiana_images || warn "Could not pre-pull Daiana images; Portainer may still require registry access"
+fi
 
 log "Deploying Daiana app stack via Portainer"
+if [ "${BUNDLE_ACTIVE:-0}" = "1" ]; then
+  log "Complete deployment bundle replacement start: sha256:$BUNDLE_SHA256; rollback snapshot=$LAST_UPDATE_SNAPSHOT_DIR"
+fi
 portainer_upsert_stack "$APP_STACK_NAME" "$APP_STACK_ENV_JSON" "$PORTAINER_DAIA_REGISTRIES_JSON" "${APP_DEPLOY_COMPOSE_FILES[@]}"
+if [ "${BUNDLE_ACTIVE:-0}" = "1" ]; then
+  log "Complete deployment bundle replacement finish: sha256:$BUNDLE_SHA256"
+fi
 
 log "Waiting for NPM API"
 wait_for_http "$NPM_URL/api" "NPM API" 180 2 1 || die "NPM API did not become ready"
