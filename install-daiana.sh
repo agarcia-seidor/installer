@@ -1036,6 +1036,8 @@ prepare_rollback_app_compose_files() {
 
   snapshot_dir="$history_dir/$snapshot_id"
   [ -f "$snapshot_dir/docker-compose.before.yml" ] || die "Rollback snapshot is missing docker-compose.before.yml: $snapshot_dir"
+  ROLLBACK_STACK_ENV_JSON="$(read_snapshot_env "$snapshot_dir/portainer-env.before.json")" \
+    || die "Could not load saved Portainer Env"
 
   log "Selected rollback snapshot: $snapshot_id"
   if [ -f "$snapshot_dir/versions.before.txt" ]; then
@@ -1060,6 +1062,7 @@ save_update_snapshot() {
   snapshot_dir="$history_dir/$snapshot_id"
   LAST_UPDATE_SNAPSHOT_DIR="$snapshot_dir"
   mkdir -p "$snapshot_dir"
+  chmod 700 "$snapshot_dir"
 
   stack_id="$(portainer_stack_id "$APP_STACK_NAME" || true)"
   [ -n "$stack_id" ] && [ "$stack_id" != "null" ] || die "Cannot snapshot missing Portainer stack: $APP_STACK_NAME"
@@ -1067,6 +1070,12 @@ save_update_snapshot() {
     | jq -jer '.StackFileContent // .stackFileContent // empty' > "$snapshot_dir/docker-compose.before.yml" \
     || die "Could not capture exact Portainer stack content"
   [ -s "$snapshot_dir/docker-compose.before.yml" ] || die "Portainer returned empty stack content"
+  install -m 600 /dev/null "$snapshot_dir/portainer-env.before.json"
+  portainer_request_json GET "/api/stacks/$stack_id?endpointId=$PORTAINER_ENDPOINT_ID" \
+    | jq -ce '.Env // .env' > "$snapshot_dir/portainer-env.before.json" \
+    || die "Could not capture Portainer stack Env"
+  read_snapshot_env "$snapshot_dir/portainer-env.before.json" >/dev/null \
+    || die "Could not validate Portainer stack Env"
 
   report_daiana_versions "$snapshot_dir/docker-compose.before.yml" > "$snapshot_dir/versions.before.txt" 2>&1 || true
   jq -n \
@@ -1074,9 +1083,10 @@ save_update_snapshot() {
     --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg stack "$APP_STACK_NAME" \
     --arg source "portainer-exact-stack" \
+    --arg env_sha256 "$(deployment_bundle_sha256 "$(<"$snapshot_dir/portainer-env.before.json")")" \
     --argjson selected_bundle "$(deployment_bundle_metadata_json)" \
     '{id:$id, created_at:$created_at, stack:$stack, type:"image-orchestration-rollback", source:$source,
-      selected_bundle:$selected_bundle,
+      portainer_env_sha256:$env_sha256, selected_bundle:$selected_bundle,
       note:"Restores compose/images only; does not roll back databases, migrations, or volumes."}' \
     > "$snapshot_dir/metadata.json"
 
@@ -1490,6 +1500,7 @@ APP_DEPLOY_COMPOSE_FILES=("${APP_COMPOSE_FILES[@]}")
 UPDATE_COMPOSE_OVERRIDE_FILE=""
 UPDATE_HISTORY_DIR="${UPDATE_HISTORY_DIR:-./volumes/daiana/update-history}"
 ROLLBACK_SNAPSHOT_DIR=""
+ROLLBACK_STACK_ENV_JSON=""
 LAST_UPDATE_SNAPSHOT_DIR=""
 
 SUPABASE_CORE_CONTAINERS=(
@@ -1761,8 +1772,13 @@ CURRENT_PHASE="preparing update image versions"
 prepare_update_app_compose_files
 
 CURRENT_PHASE="building stack envs"
-NPM_STACK_ENV_JSON="$(stack_env_json docker-compose.npm.yml)"
-APP_STACK_ENV_JSON="$(stack_env_json "${APP_DEPLOY_COMPOSE_FILES[@]}")"
+if [ "$ROLLBACK_MODE" = "1" ]; then
+  NPM_STACK_ENV_JSON='[]'
+  APP_STACK_ENV_JSON="$ROLLBACK_STACK_ENV_JSON"
+else
+  NPM_STACK_ENV_JSON="$(stack_env_json docker-compose.npm.yml)"
+  APP_STACK_ENV_JSON="$(stack_env_json "${APP_DEPLOY_COMPOSE_FILES[@]}")"
+fi
 
 if [ "$ACTION" = "update" ]; then
   CURRENT_PHASE="validating current versions"

@@ -80,6 +80,14 @@ deployment_bundle_metadata_json() {
   fi
 }
 
+read_snapshot_env() {
+  local file="$1"
+  [ -f "$file" ] || { die "Rollback snapshot is missing portainer-env.before.json: $file"; return 1; }
+  jq -ce 'select(type == "array" and all(.[];
+    type == "object" and (.name | type == "string") and (.value | type == "string")))' "$file" \
+    || { die "Rollback snapshot contains invalid Portainer Env"; return 1; }
+}
+
 prepull_deployment_bundle_images() {
   local image
   for image in "$BUNDLE_PYTHON_IMAGE" "$BUNDLE_NEXT_IMAGE" "$BUNDLE_STUDIO_IMAGE"; do

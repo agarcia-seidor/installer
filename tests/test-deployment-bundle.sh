@@ -99,6 +99,21 @@ finish_line="$(grep -n 'Complete deployment bundle replacement finish' "$ROOT_DI
   || fail "bundle start/finish do not bracket only the Portainer update"
 pass "bundle boundary begins after pulls and finishes after submission"
 
+snapshot_env="$TMP_DIR/portainer-env.before.json"
+printf '%s\n' '[{"name":"SECRET","value":"saved-value"}]' > "$snapshot_env"
+saved_env="$(read_snapshot_env "$snapshot_env")" || fail "valid snapshot Env rejected"
+printf '%s\n' '[{"name":"SECRET"}]' > "$snapshot_env"
+if read_snapshot_env "$snapshot_env" >/dev/null 2>&1; then fail "malformed snapshot Env accepted"; fi
+rm "$snapshot_env"
+if read_snapshot_env "$snapshot_env" >/dev/null 2>&1; then fail "missing snapshot Env accepted"; fi
+awk '/^CURRENT_PHASE="building stack envs"/,/^if \[ "\$ACTION" = "update" \]/' "$ROOT_DIR/install-daiana.sh" \
+  | sed '$d' > "$TMP_DIR/build-stack-envs.sh"
+stack_env_json() { fail "rollback read hostile current .env"; }
+# shellcheck source=/dev/null
+ROLLBACK_MODE=1 ROLLBACK_STACK_ENV_JSON="$saved_env" source "$TMP_DIR/build-stack-envs.sh"
+[[ "$APP_STACK_ENV_JSON" = "$saved_env" ]] || fail "rollback changed saved Env"
+pass "snapshot Env validation fails closed"
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   final_stack="$TMP_DIR/final-stack.yml"
   docker compose --env-file "$ROOT_DIR/.env.example" -f "$ROOT_DIR/docker-compose.yml" -f "$ROOT_DIR/docker-compose.app.yml" -f "$override" \
@@ -123,10 +138,12 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   cp "$final_stack" "$TMP_DIR/docker-compose.before.yml"
   CAPTURED_PAYLOAD=""
   DAIANA_NEXT_IMAGE=hostile DAIANA_PYTHON_IMAGE=hostile DAIANA_STUDIO_IMAGE=hostile \
-    PORTAINER_ENDPOINT_ID=1 portainer_submit_stack_file daiana-app '[]' '[2]' "$TMP_DIR/docker-compose.before.yml"
+    PORTAINER_ENDPOINT_ID=1 portainer_submit_stack_file daiana-app "$saved_env" '[2]' "$TMP_DIR/docker-compose.before.yml"
   jq -jr '.StackFileContent' <<<"$CAPTURED_PAYLOAD" > "$TMP_DIR/rollback-submitted.yml"
   cmp -s "$TMP_DIR/docker-compose.before.yml" "$TMP_DIR/rollback-submitted.yml" || fail "rollback re-rendered stored stack"
-  pass "submitted stack and rollback retain all exact literal refs"
+  jq -e --argjson saved "$saved_env" '.Env == $saved' <<<"$CAPTURED_PAYLOAD" >/dev/null \
+    || fail "rollback payload changed saved Env"
+  pass "submitted stack and rollback retain exact stack and saved Env"
 else
   printf 'SKIP: Docker Compose unavailable\n'
 fi
